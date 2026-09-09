@@ -1,4 +1,5 @@
-# V.A.A.N.I. stands for Voice Authetication and Acoustic Neural Interceptor
+# V.A.A.N.I. 
+(Voice Authetication and Acoustic Neural Interceptor)
 
 AI-powered real-time detection and prevention of voice-cloning impersonation attacks.
 
