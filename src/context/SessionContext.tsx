@@ -148,7 +148,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
               shimmer: raw.shimmer ?? prev.shimmer,
               jitterHz: raw.f0 ?? prev.jitterHz,
               vocoderHint,
-              transcript: prev.transcript,
+              transcript: raw.text || raw.transcript || prev.transcript,
             }
           })
         },
