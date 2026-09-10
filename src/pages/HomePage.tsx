@@ -147,9 +147,9 @@ export function HomePage() {
         </GlassCard>
 
         <GlassCard className="p-5">
-          <div className="text-[11px] uppercase tracking-[0.16em] text-neutral-500">Layer scores</div>
+          <div className="text-[11px] uppercase tracking-[0.16em] text-neutral-500">Detection layers (AASIST)</div>
           <LayerRow
-            label="Acoustic fake"
+            label="AI Voice Detection"
             value={telemetry.acousticFake}
             sub={telemetry.vocoderHint}
           />
@@ -275,15 +275,32 @@ function LayerRow({
   invert?: boolean
 }) {
   const pct = Math.round(value * 100)
+  const isHighRisk = !invert && value >= 0.5
+
   return (
     <div className="mt-3">
-      <div className="flex justify-between text-[13px]">
+      <div className="flex items-center justify-between text-[13px]">
         <span className="font-medium text-neutral-800">{label}</span>
-        <span className="text-neutral-500">{pct}%</span>
+        <div className="flex items-center gap-2">
+          {isHighRisk && (
+            <span className="rounded bg-red-100 px-1.5 py-0.5 text-[10px] font-bold tracking-wider text-red-700 uppercase animate-pulse">
+              SYNTHETIC VOICE DETECTED
+            </span>
+          )}
+          <span className={`font-semibold ${isHighRisk ? 'text-red-600' : 'text-neutral-600'}`}>
+            {pct}%
+          </span>
+        </div>
       </div>
-      <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-black/5">
+      <div className="mt-1.5 h-2 overflow-hidden rounded-full bg-black/5">
         <div
-          className={`h-full ${invert ? 'bg-emerald-700' : 'bg-gradient-to-r from-[#004ee8] to-[#00bfa5]'}`}
+          className={`h-full transition-all duration-300 ${
+            invert
+              ? 'bg-emerald-600'
+              : isHighRisk
+                ? 'bg-gradient-to-r from-red-600 to-rose-500'
+                : 'bg-gradient-to-r from-[#004ee8] to-[#00bfa5]'
+          }`}
           style={{ width: `${pct}%` }}
         />
       </div>
