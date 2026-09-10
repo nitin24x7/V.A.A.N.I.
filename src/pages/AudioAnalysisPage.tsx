@@ -1,0 +1,501 @@
+import { useState, useRef, type ChangeEvent, type DragEvent } from 'react'
+import {
+  AlertTriangle,
+  CheckCircle2,
+  Cpu,
+  FileAudio,
+  Play,
+  Pause,
+  RotateCcw,
+  Sparkles,
+  Upload,
+  UserCheck,
+  UserX,
+  Volume2,
+} from 'lucide-react'
+import { GlassCard } from '../components/ui/GlassCard'
+import { Button } from '../components/ui/Button'
+import { useSession } from '../context/SessionContext'
+
+type ForensicsResult = {
+  filename: string
+  duration_sec: number
+  sample_rate: number
+  acoustic_fake_probability: number
+  is_fake: boolean
+  verdict: string
+  speaker_match: number
+  is_cfo_match: boolean
+  cfo_identity_match: string
+  enrolled_speaker: string
+  features: {
+    f0: number
+    jitter: number
+    shimmer: number
+    phase_discontinuity: number
+    spectral_centroid: number
+    rms_db: number
+    is_speech: boolean
+  }
+  ml_models: {
+    deepfake_detector: string
+    speaker_verifier: string
+    inference_ms: number
+  }
+}
+
+export function AudioAnalysisPage() {
+  const { voiceprint } = useSession()
+  const [selectedFile, setSelectedFile] = useState<File | null>(null)
+  const [audioUrl, setAudioUrl] = useState<string | null>(null)
+  const [analyzing, setAnalyzing] = useState(false)
+  const [result, setResult] = useState<ForensicsResult | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [isPlaying, setIsPlaying] = useState(false)
+  const [isDragOver, setIsDragOver] = useState(false)
+
+  const audioRef = useRef<HTMLAudioElement | null>(null)
+  const fileInputRef = useRef<HTMLInputElement | null>(null)
+
+  const handleFileChange = (file: File) => {
+    setSelectedFile(file)
+    setResult(null)
+    setError(null)
+    const url = URL.createObjectURL(file)
+    setAudioUrl(url)
+    setIsPlaying(false)
+  }
+
+  const onFileInputChange = (e: ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files[0]) {
+      handleFileChange(e.target.files[0])
+    }
+  }
+
+  const onDrop = (e: DragEvent<HTMLDivElement>) => {
+    e.preventDefault()
+    setIsDragOver(false)
+    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+      handleFileChange(e.dataTransfer.files[0])
+    }
+  }
+
+  // Preset demo audio generator: generates synthetic or genuine-like wav in browser
+  const loadPreset = (type: 'genuine' | 'clone') => {
+    setError(null)
+    setResult(null)
+
+    const sr = 16000
+    const duration = 2.5
+    const numSamples = Math.floor(sr * duration)
+    const buffer = new ArrayBuffer(44 + numSamples * 2)
+    const view = new DataView(buffer)
+
+    // Helper to write string to DataView
+    const writeString = (offset: number, str: string) => {
+      for (let i = 0; i < str.length; i++) {
+        view.setUint8(offset + i, str.charCodeAt(i))
+      }
+    }
+
+    // WAV Header
+    writeString(0, 'RIFF')
+    view.setUint32(4, 36 + numSamples * 2, true)
+    writeString(8, 'WAVE')
+    writeString(12, 'fmt ')
+    view.setUint32(16, 16, true)
+    view.setUint16(20, 1, true) // PCM
+    view.setUint16(22, 1, true) // mono
+    view.setUint32(24, sr, true)
+    view.setUint32(28, sr * 2, true)
+    view.setUint16(32, 2, true)
+    view.setUint16(34, 16, true)
+    writeString(36, 'data')
+    view.setUint32(40, numSamples * 2, true)
+
+    // Generate samples
+    let offset = 44
+    for (let i = 0; i < numSamples; i++) {
+      const t = i / sr
+      let s = 0
+      if (type === 'genuine') {
+        // Natural human glottal pulse with slight jitter
+        const f0 = 180 + Math.sin(2 * Math.PI * 5 * t) * 6
+        s = 0.5 * Math.sin(2 * Math.PI * f0 * t) +
+            0.25 * Math.sin(2 * Math.PI * 2 * f0 * t) +
+            0.1 * (Math.random() * 2 - 1)
+      } else {
+        // Synthetic deepfake: unnaturally flat pitch, high harmonic dispersion
+        const f0 = 240
+        s = 0.6 * Math.sin(2 * Math.PI * f0 * t) +
+            0.4 * Math.sin(2 * Math.PI * 2 * f0 * t) +
+            0.3 * Math.sin(2 * Math.PI * 3 * f0 * t) +
+            0.2 * Math.sin(2 * Math.PI * 4 * f0 * t)
+      }
+      s = Math.max(-1, Math.min(1, s))
+      view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7fff, true)
+      offset += 2
+    }
+
+    const blob = new Blob([buffer], { type: 'audio/wav' })
+    const filename = type === 'genuine' ? 'genuine_cfo_call.wav' : 'synthesized_deepfake_clone.wav'
+    const file = new File([blob], filename, { type: 'audio/wav' })
+    handleFileChange(file)
+  }
+
+  const togglePlay = () => {
+    if (!audioRef.current) return
+    if (isPlaying) {
+      audioRef.current.pause()
+      setIsPlaying(false)
+    } else {
+      audioRef.current.play()
+      setIsPlaying(true)
+    }
+  }
+
+  const runAnalysis = async () => {
+    if (!selectedFile) return
+    setAnalyzing(true)
+    setError(null)
+
+    try {
+      const formData = new FormData()
+      formData.append('file', selectedFile)
+
+      const res = await fetch('/api/analyze-audio', {
+        method: 'POST',
+        body: formData,
+      })
+
+      if (!res.ok) {
+        throw new Error(`Analysis server returned ${res.status}: ${res.statusText}`)
+      }
+
+      const data: ForensicsResult = await res.json()
+      setResult(data)
+    } catch (err: any) {
+      setError(err.message || 'Failed to analyze audio file. Please try again.')
+    } finally {
+      setAnalyzing(false)
+    }
+  }
+
+  return (
+    <div className="space-y-6">
+      {/* Header */}
+      <div>
+        <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.2em] text-neutral-500">
+          <FileAudio size={14} />
+          Phase 4 · Prerecorded Audio Forensics
+        </div>
+        <h1 className="mt-1 text-2xl font-semibold tracking-tight">Detect AI-Generated Audio</h1>
+        <p className="mt-1.5 max-w-2xl text-sm leading-6 text-neutral-600">
+          Upload any prerecorded audio file (<code className="rounded bg-black/5 px-1 py-0.5 text-xs">.wav</code>, <code className="rounded bg-black/5 px-1 py-0.5 text-xs">.mp3</code>, <code className="rounded bg-black/5 px-1 py-0.5 text-xs">.m4a</code>) to run full forensic inspection through the **AASIST deepfake detector** and **ECAPA-TDNN speaker verification engine**.
+        </p>
+      </div>
+
+      <div className="grid gap-6 lg:grid-cols-[1.1fr_0.9fr]">
+        {/* Upload & Controls Card */}
+        <GlassCard className="p-6 md:p-8">
+          <h2 className="text-lg font-semibold tracking-tight">Audio File Input</h2>
+
+          {/* Drag & Drop Zone */}
+          <div
+            onDragOver={(e) => {
+              e.preventDefault()
+              setIsDragOver(true)
+            }}
+            onDragLeave={() => setIsDragOver(false)}
+            onDrop={onDrop}
+            onClick={() => fileInputRef.current?.click()}
+            className={`mt-4 flex cursor-pointer flex-col items-center justify-center rounded-2xl border-2 border-dashed p-8 text-center transition ${
+              isDragOver
+                ? 'border-[#004ee8] bg-blue-50/50'
+                : 'border-black/10 bg-white/40 hover:border-black/20 hover:bg-white/70'
+            }`}
+          >
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="audio/*,.wav,.mp3,.m4a,.ogg,.flac"
+              className="hidden"
+              onChange={onFileInputChange}
+            />
+            <div className="rounded-full bg-gradient-to-r from-[#004ee8]/10 to-[#00bfa5]/10 p-4 text-[#004ee8]">
+              <Upload size={24} />
+            </div>
+            <p className="mt-3 text-sm font-medium text-neutral-800">
+              {selectedFile ? selectedFile.name : 'Click to select or drag & drop audio here'}
+            </p>
+            <p className="mt-1 text-xs text-neutral-500">
+              Supports WAV, MP3, M4A, FLAC, OGG (up to 25 MB)
+            </p>
+          </div>
+
+          {/* Preset Buttons */}
+          <div className="mt-4">
+            <div className="text-[11px] font-medium uppercase tracking-wider text-neutral-400">
+              Or test with pre-built samples
+            </div>
+            <div className="mt-2 flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => loadPreset('genuine')}
+                className="flex items-center gap-1.5 rounded-xl border border-black/10 bg-white/80 px-3 py-2 text-xs font-medium text-neutral-700 shadow-sm transition hover:bg-white"
+              >
+                <Sparkles size={13} className="text-emerald-600" />
+                Sample Genuine Call
+              </button>
+              <button
+                type="button"
+                onClick={() => loadPreset('clone')}
+                className="flex items-center gap-1.5 rounded-xl border border-black/10 bg-white/80 px-3 py-2 text-xs font-medium text-neutral-700 shadow-sm transition hover:bg-white"
+              >
+                <Sparkles size={13} className="text-rose-600" />
+                Sample Cloned Deepfake
+              </button>
+            </div>
+          </div>
+
+          {/* Audio Player Preview */}
+          {audioUrl && (
+            <div className="mt-6 rounded-2xl border border-black/10 bg-white/70 p-4">
+              <audio
+                ref={audioRef}
+                src={audioUrl}
+                onEnded={() => setIsPlaying(false)}
+                className="hidden"
+              />
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={togglePlay}
+                    className="flex h-10 w-10 items-center justify-center rounded-full bg-gradient-to-r from-[#004ee8] to-[#00bfa5] text-white shadow-md transition hover:scale-105"
+                  >
+                    {isPlaying ? <Pause size={16} /> : <Play size={16} className="ml-0.5" />}
+                  </button>
+                  <div>
+                    <div className="text-sm font-medium text-neutral-900 truncate max-w-[200px] md:max-w-xs">
+                      {selectedFile?.name}
+                    </div>
+                    <div className="text-xs text-neutral-500">
+                      {selectedFile ? `${(selectedFile.size / 1024).toFixed(1)} KB` : 'Ready'}
+                    </div>
+                  </div>
+                </div>
+                <div className="flex items-center gap-1 text-xs text-neutral-400">
+                  <Volume2 size={16} />
+                  <span>16 kHz</span>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Action Button */}
+          <div className="mt-6">
+            <Button
+              disabled={!selectedFile || analyzing}
+              onClick={runAnalysis}
+              className="w-full py-3"
+            >
+              {analyzing ? (
+                <span className="inline-flex items-center gap-2">
+                  <RotateCcw size={16} className="animate-spin" />
+                  Running AASIST + ECAPA-TDNN Models...
+                </span>
+              ) : (
+                'Run AI Deepfake & Speaker Forensics'
+              )}
+            </Button>
+          </div>
+
+          {error && (
+            <div className="mt-4 rounded-xl border border-red-200 bg-red-50 p-3 text-xs text-red-700">
+              {error}
+            </div>
+          )}
+        </GlassCard>
+
+        {/* Results Card */}
+        <GlassCard className="p-6 md:p-8">
+          <h2 className="text-lg font-semibold tracking-tight">Forensic Assessment</h2>
+
+          {analyzing && (
+            <div className="mt-8 flex flex-col items-center justify-center space-y-3 py-12 text-center">
+              <div className="h-10 w-10 animate-spin rounded-full border-3 border-[#004ee8] border-t-transparent" />
+              <p className="text-sm font-medium text-neutral-700">Analyzing speech acoustics...</p>
+              <p className="text-xs text-neutral-400">
+                Extracting SincNet graph features & 192-D ECAPA embeddings
+              </p>
+            </div>
+          )}
+
+          {!analyzing && !result && (
+            <div className="mt-8 flex flex-col items-center justify-center space-y-2 py-16 text-center text-neutral-400">
+              <FileAudio size={40} className="text-neutral-300 stroke-[1.2]" />
+              <p className="text-sm font-medium text-neutral-600">No Audio Analyzed Yet</p>
+              <p className="max-w-xs text-xs text-neutral-400">
+                Select an audio file or click a pre-built sample to run the deepfake and speaker verification inspection.
+              </p>
+            </div>
+          )}
+
+          {!analyzing && result && (
+            <div className="mt-4 space-y-5">
+              {/* Dual Independent Signals */}
+              <div className="space-y-4">
+                {/* Signal 1: Synthetic Voice Detection (AASIST) */}
+                <div className="rounded-2xl border border-black/5 bg-white/70 p-4">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] font-semibold uppercase tracking-wider text-neutral-500">
+                      Signal 1 · AI Voice Detection
+                    </span>
+                    <span
+                      className={`rounded px-2 py-0.5 text-[10px] font-bold tracking-wider uppercase ${
+                        result.is_fake
+                          ? 'bg-red-100 text-red-700 animate-pulse'
+                          : 'bg-emerald-100 text-emerald-700'
+                      }`}
+                    >
+                      {result.verdict}
+                    </span>
+                  </div>
+                  <div className="mt-3 flex items-baseline justify-between">
+                    <span className="text-2xl font-bold tracking-tight">
+                      {Math.round(result.acoustic_fake_probability * 100)}%
+                    </span>
+                    <span className="text-xs text-neutral-400">
+                      AASIST Graph Attention Model
+                    </span>
+                  </div>
+                  <div className="mt-2 h-2 overflow-hidden rounded-full bg-black/5">
+                    <div
+                      className={`h-full transition-all duration-500 ${
+                        result.is_fake
+                          ? 'bg-gradient-to-r from-red-600 to-rose-500'
+                          : 'bg-gradient-to-r from-[#004ee8] to-[#00bfa5]'
+                      }`}
+                      style={{ width: `${Math.round(result.acoustic_fake_probability * 100)}%` }}
+                    />
+                  </div>
+                </div>
+
+                {/* Signal 2: Speaker Identity Match (ECAPA-TDNN) */}
+                <div className="rounded-2xl border border-black/5 bg-white/70 p-4">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] font-semibold uppercase tracking-wider text-neutral-500">
+                      Signal 2 · Speaker Verification
+                    </span>
+                    <span
+                      className={`inline-flex items-center gap-1 rounded px-2 py-0.5 text-[10px] font-bold tracking-wider uppercase ${
+                        result.is_cfo_match
+                          ? 'bg-emerald-100 text-emerald-700'
+                          : 'bg-amber-100 text-amber-700'
+                      }`}
+                    >
+                      {result.is_cfo_match ? <UserCheck size={12} /> : <UserX size={12} />}
+                      {result.cfo_identity_match}
+                    </span>
+                  </div>
+                  <div className="mt-3 flex items-baseline justify-between">
+                    <span className="text-2xl font-bold tracking-tight">
+                      {Math.round(result.speaker_match * 100)}%
+                    </span>
+                    <span className="text-xs text-neutral-400">
+                      Target: {voiceprint?.name || result.enrolled_speaker}
+                    </span>
+                  </div>
+                  <div className="mt-2 h-2 overflow-hidden rounded-full bg-black/5">
+                    <div
+                      className={`h-full transition-all duration-500 ${
+                        result.is_cfo_match
+                          ? 'bg-emerald-600'
+                          : 'bg-amber-500'
+                      }`}
+                      style={{ width: `${Math.round(result.speaker_match * 100)}%` }}
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Combined Verdict Alert */}
+              <div
+                className={`rounded-2xl border p-4 ${
+                  result.is_fake && !result.is_cfo_match
+                    ? 'border-red-200 bg-red-50/80 text-red-900'
+                    : !result.is_fake && result.is_cfo_match
+                    ? 'border-emerald-200 bg-emerald-50/80 text-emerald-900'
+                    : 'border-amber-200 bg-amber-50/80 text-amber-900'
+                }`}
+              >
+                <div className="flex items-start gap-3">
+                  {result.is_fake && !result.is_cfo_match ? (
+                    <AlertTriangle className="mt-0.5 shrink-0 text-red-600" size={18} />
+                  ) : (
+                    <CheckCircle2 className="mt-0.5 shrink-0 text-emerald-600" size={18} />
+                  )}
+                  <div>
+                    <div className="text-xs font-bold uppercase tracking-wider">
+                      {result.is_fake && !result.is_cfo_match
+                        ? 'CRITICAL SECURITY ALERT: High Impersonation Risk'
+                        : !result.is_fake && result.is_cfo_match
+                        ? 'GENUINE EXECUTIVE CONFIRMED'
+                        : 'ANOMALY DETECTED'}
+                    </div>
+                    <p className="mt-1 text-xs leading-5 opacity-90">
+                      {result.is_fake && !result.is_cfo_match
+                        ? 'AASIST detected neural vocoder phase artifacts and ECAPA-TDNN confirmed biometric mismatch with the enrolled CFO. Payment workflows should remain locked.'
+                        : !result.is_fake && result.is_cfo_match
+                        ? 'Natural physiological micro-tremors verified and biometric cosine similarity exceeds 0.70 threshold. Voice confirmed authentic.'
+                        : 'Mixed forensic signals detected. Manual verification recommended.'}
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Forensic Metrics Grid */}
+              <div className="grid grid-cols-2 gap-2 text-xs">
+                <div className="rounded-xl bg-white/60 p-3">
+                  <div className="text-neutral-400">Pitch (F0)</div>
+                  <div className="mt-1 text-sm font-semibold text-neutral-800">
+                    {result.features.f0 > 0 ? `${result.features.f0.toFixed(1)} Hz` : 'Unvoiced'}
+                  </div>
+                </div>
+                <div className="rounded-xl bg-white/60 p-3">
+                  <div className="text-neutral-400">Phase Discontinuity</div>
+                  <div className="mt-1 text-sm font-semibold text-neutral-800">
+                    {(result.features.phase_discontinuity * 100).toFixed(1)}%
+                  </div>
+                </div>
+                <div className="rounded-xl bg-white/60 p-3">
+                  <div className="text-neutral-400">Jitter (Micro-tremor)</div>
+                  <div className="mt-1 text-sm font-semibold text-neutral-800">
+                    {(result.features.jitter * 100).toFixed(2)}%
+                  </div>
+                </div>
+                <div className="rounded-xl bg-white/60 p-3">
+                  <div className="text-neutral-400">Spectral Centroid</div>
+                  <div className="mt-1 text-sm font-semibold text-neutral-800">
+                    {Math.round(result.features.spectral_centroid)} Hz
+                  </div>
+                </div>
+              </div>
+
+              {/* Model Provenance */}
+              <div className="flex items-center justify-between text-[11px] text-neutral-400 pt-1">
+                <span className="flex items-center gap-1">
+                  <Cpu size={12} />
+                  AASIST + ECAPA-TDNN
+                </span>
+                <span>Inference: {result.ml_models.inference_ms.toFixed(1)} ms</span>
+              </div>
+            </div>
+          )}
+        </GlassCard>
+      </div>
+    </div>
+  )
+}
+

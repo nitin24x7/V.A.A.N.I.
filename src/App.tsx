@@ -2,6 +2,7 @@ import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 import { SessionProvider } from './context/SessionContext'
 import { AppShell } from './components/layout/AppShell'
 import { HomePage } from './pages/HomePage'
+import { AudioAnalysisPage } from './pages/AudioAnalysisPage'
 import { EnrollPage } from './pages/EnrollPage'
 import { CallPage } from './pages/CallPage'
 import { BankingPage } from './pages/BankingPage'
@@ -17,6 +18,7 @@ export default function App() {
         <Routes>
           <Route element={<AppShell />}>
             <Route path="/" element={<HomePage />} />
+            <Route path="/analyze" element={<AudioAnalysisPage />} />
             <Route path="/demo" element={<Navigate to="/" replace />} />
             <Route path="/dashboard" element={<Navigate to="/" replace />} />
             <Route path="/enroll" element={<EnrollPage />} />
