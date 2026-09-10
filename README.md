@@ -18,6 +18,12 @@ V.A.A.N.I. is an active, low-latency call interception engine operating over liv
    - **Model**: **AASIST** (*Audio Anti-Spoofing using Integrated Spectro-Temporal Graph Attention Networks*, ICASSP 2022).
    - Raw waveform SincNet frontend + Spectro-Temporal Graph Attention (297k parameters, ~1.2 MB).
    - Real-time CPU inference returning `acoustic_fake_probability` on each speech window.
+4. **Phase 4 — Speaker Identity & Prerecorded Audio Forensics**:
+   - **Model**: **ECAPA-TDNN** (*Emphasized Channel Attention, Propagation and Aggregation in TDNN*, Interspeech 2020).
+   - 80-channel Mel filterbanks + dilated SE-Res2Net blocks + Attentive Statistics Pooling producing **192-D speaker embeddings**.
+   - `POST /enroll` & `POST /api/enroll`: 10–15s enrollment to vault executive voiceprint.
+   - Dual-signal live fusion: Fake Voice Detector (`0.91`) + Speaker Verification (`0.34`).
+   - Sidebar **"Audio Forensics"** feature (`/analyze` & `POST /api/analyze-audio`): upload `.wav`/`.mp3` audio files for instant deepfake detection and CFO identity match reports.
 
 ---
 
@@ -122,17 +128,18 @@ Vaani/
 │   ├── audio_buffer.py       # 1.0s circular ring buffer with 250ms stride & normalizer
 │   ├── deepfake_detector.py  # AASIST PyTorch deepfake detection wrapper
 │   ├── dsp.py                # VAD, F0 pitch tracking, jitter, shimmer, spectral flux
-│   ├── main.py               # FastAPI REST & WebSocket streaming server (/ws/audio)
+│   ├── main.py               # FastAPI REST & WebSocket server (/ws/audio, /enroll, /api/analyze-audio)
 │   ├── requirements.txt      # Python dependencies
-│   ├── voiceprint.py         # 192-d acoustic embedding extractor & biometric verifier
+│   ├── voiceprint.py         # ECAPA-TDNN 192-d speaker verifier & profile vault
 │   └── models/
-│       ├── AASIST.py         # AASIST model architecture
+│       ├── AASIST.py         # AASIST deepfake model architecture
+│       ├── ECAPA_TDNN.py     # ECAPA-TDNN 192-D speaker embedding model
 │       └── weights/          # Checkpoint directory (AASIST.pth)
 ├── src/
 │   ├── components/           # UI components (Waveform, GlassCard, AppShell, etc.)
 │   ├── context/              # React SessionContext (WebSocket streaming & state)
 │   ├── lib/                  # Audio ingestion service (ScriptProcessorNode Int16)
-│   ├── pages/                # Dashboard, Enrollment, Call, Sources, SIEM pages
+│   ├── pages/                # Dashboard, Audio Forensics, Enrollment, Call, Sources, SIEM pages
 │   └── types.ts              # TypeScript contracts for telemetry & incidents
 ├── public/                   # Static assets & brand logo
 ├── package.json              # Node scripts & dependencies

@@ -1,6 +1,7 @@
 import {
   Activity,
   Cpu,
+  FileAudio,
   LayoutDashboard,
   PhoneCall,
   Radio,
@@ -15,6 +16,7 @@ import { StatusPill } from '../ui/StatusPill'
 
 const links = [
   { to: '/', label: 'Dashboard', icon: LayoutDashboard, end: true },
+  { to: '/analyze', label: 'Audio Forensics', icon: FileAudio },
   { to: '/enroll', label: 'Voice Enrollment', icon: UserRound },
   { to: '/call', label: 'Live Call', icon: PhoneCall },
   { to: '/incidents', label: 'SIEM Incidents', icon: Activity },
