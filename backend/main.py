@@ -15,6 +15,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'deps'))
 from audio_buffer import AudioRingBuffer
 from dsp import analyze_audio_window
 from voiceprint import voiceprint_manager
+from deepfake_detector import deepfake_detector
 
 app = FastAPI(
     title="VAANI Backend",
@@ -155,6 +156,15 @@ async def audio_websocket_endpoint(websocket: WebSocket):
                     # Phase 2 DSP: returns timestamp, speech_detected, audio_duration_ms
                     dsp_results = analyze_audio_window(window, sample_rate=16000, mode=state.mode)
 
+                    # ── Phase 3: AASIST Deepfake Detection ──
+                    # Run the real ML model on speech windows
+                    ml_result = None
+                    if dsp_results["is_speech"]:
+                        ml_result = deepfake_detector.predict(window, sample_rate=16000)
+                        acoustic_fake = ml_result["acoustic_fake_probability"]
+                    else:
+                        acoustic_fake = 0.02  # No speech → negligible fake probability
+
                     # Biometric verification against enrolled profile
                     bio_match = voiceprint_manager.verify(window, sample_rate=16000)
 
@@ -167,7 +177,6 @@ async def audio_websocket_endpoint(websocket: WebSocket):
                     # 3-Tier Risk Fusion:
                     # Risk = w1*(Acoustic_Fake_Prob) + w2*(1 - Bio_Match) + w3*(Intent_Score)
                     w1, w2, w3 = 0.45, 0.30, 0.25
-                    acoustic_fake = dsp_results["acoustic_fake_prob"]
                     bio_penalty = max(0.0, 1.0 - bio_match)
 
                     if not dsp_results["is_speech"]:
@@ -184,10 +193,10 @@ async def audio_websocket_endpoint(websocket: WebSocket):
                     else:
                         level = "low"
 
-                    inference_latency_ms = round((time.perf_counter() - start_time) * 1000 + 12.0, 1)
+                    inference_latency_ms = round((time.perf_counter() - start_time) * 1000, 1)
                     buf_stats = ring_buffer.get_stats()
 
-                    # Phase 2 telemetry payload — includes structured output fields
+                    # Phase 3 telemetry payload — includes ML model results
                     telemetry_payload = {
                         "type": "telemetry",
                         "sessionId": session_id,
@@ -205,6 +214,7 @@ async def audio_websocket_endpoint(websocket: WebSocket):
                         "spectralCentroid": dsp_results.get("spectral_centroid", 0.0),
                         "rolloff": dsp_results.get("rolloff", 0.0),
                         "phaseDiscontinuity": dsp_results["phase_discontinuity"],
+                        # Phase 3: ML-powered acoustic fake score
                         "acousticFake": acoustic_fake,
                         "bioMatch": bio_match,
                         "intentScore": round(intent_score, 3),
@@ -219,6 +229,13 @@ async def audio_websocket_endpoint(websocket: WebSocket):
                         "bufferFillPct": buf_stats["buffer_fill_pct"],
                         # VAD feature details
                         "vad": dsp_results.get("vad"),
+                        # Phase 3: ML model metadata
+                        "mlModel": {
+                            "type": ml_result["model_type"] if ml_result else None,
+                            "inferenceMs": ml_result["inference_ms"] if ml_result else None,
+                            "pretrained": ml_result["pretrained"] if ml_result else None,
+                            "confidence": ml_result["confidence"] if ml_result else None,
+                        } if ml_result else None,
                     }
 
                     # If critical risk, record incident

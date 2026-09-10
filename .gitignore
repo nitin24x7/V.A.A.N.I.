@@ -1,5 +1,11 @@
+# Node / Frontend
+node_modules/
+dist/
+dist-ssr/
+*.local
+
 # Logs
-logs
+logs/
 *.log
 npm-debug.log*
 yarn-debug.log*
@@ -7,25 +13,49 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
-node_modules
-dist
-dist-ssr
-*.local
+# Python & Virtual Environments
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+.env
+.env.*
+!.env.example
+.venv/
+venv/
+ENV/
+env/
+backend_venv/
+backend/deps/
 
-# Editor directories and files
+# Model Checkpoints (weights auto-downloaded on first run)
+backend/models/weights/*.pth
+backend/models/weights/*.pt
+backend/models/weights/*.bin
+backend/models/weights/*.onnx
+
+# Editor & OS files
 .vscode/*
 !.vscode/extensions.json
-.idea
+.idea/
 .DS_Store
 *.suo
 *.ntvs*
 *.njsproj
 *.sln
 *.sw?
-
-# Backend Python
-backend/deps/
-backend_venv/
-__pycache__/
-*.pyc
-

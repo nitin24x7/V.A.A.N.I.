@@ -122,6 +122,21 @@ export function SessionProvider({ children }: { children: ReactNode }) {
           setBackendConnected(true)
           setTelemetry((prev) => {
             const raw = telemetryUpdate.rawData || {}
+            const mlModel = raw.mlModel
+            const fakePct = (telemetryUpdate.acousticFake ?? 0) * 100
+
+            // Phase 3: ML-powered vocoder hint
+            let vocoderHint = prev.vocoderHint
+            if (mlModel?.type === 'aasist') {
+              vocoderHint = fakePct > 50
+                ? `SYNTHETIC VOICE DETECTED (${fakePct.toFixed(0)}%)`
+                : `Natural speech verified (${(100 - fakePct).toFixed(0)}% genuine)`
+            } else if ((raw.phaseDiscontinuity || 0) > 0.35) {
+              vocoderHint = 'HiFi-GAN / Diffusion artifact'
+            } else {
+              vocoderHint = 'Natural glottal pulse'
+            }
+
             return {
               ...prev,
               risk: telemetryUpdate.risk ?? prev.risk,
@@ -132,7 +147,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
               phaseDiscontinuity: raw.phaseDiscontinuity ?? prev.phaseDiscontinuity,
               shimmer: raw.shimmer ?? prev.shimmer,
               jitterHz: raw.f0 ?? prev.jitterHz,
-              vocoderHint: (raw.phaseDiscontinuity || 0) > 0.35 ? 'HiFi-GAN / Diffusion artifact' : 'Natural glottal pulse',
+              vocoderHint,
               transcript: prev.transcript,
             }
           })
