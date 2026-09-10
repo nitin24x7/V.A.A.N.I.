@@ -24,6 +24,11 @@ V.A.A.N.I. is an active, low-latency call interception engine operating over liv
    - `POST /enroll` & `POST /api/enroll`: 10–15s enrollment to vault executive voiceprint.
    - Dual-signal live fusion: Fake Voice Detector (`0.91`) + Speaker Verification (`0.34`).
    - Sidebar **"Audio Forensics"** feature (`/analyze` & `POST /api/analyze-audio`): upload `.wav`/`.mp3` audio files for instant deepfake detection and CFO identity match reports.
+5. **Phase 5 — Speech-to-Text (Streaming Whisper)**:
+   - **Model**: **Faster-Whisper** (`tiny.en`, CTranslate2 INT8 on CPU).
+   - Non-blocking streaming transcription via `asyncio.to_thread` worker thread pool.
+   - VAD-gated speech accumulator buffer emitting real-time partial transcripts without blocking the 250ms audio forensic stride.
+   - Emits streaming partial payload: `{"text": "You need to approve this transfer immediately...", "transcript": "..."}`.
 
 ---
 
@@ -130,6 +135,7 @@ Vaani/
 │   ├── dsp.py                # VAD, F0 pitch tracking, jitter, shimmer, spectral flux
 │   ├── main.py               # FastAPI REST & WebSocket server (/ws/audio, /enroll, /api/analyze-audio)
 │   ├── requirements.txt      # Python dependencies
+│   ├── transcriber.py        # Faster-Whisper streaming partial speech-to-text engine
 │   ├── voiceprint.py         # ECAPA-TDNN 192-d speaker verifier & profile vault
 │   └── models/
 │       ├── AASIST.py         # AASIST deepfake model architecture

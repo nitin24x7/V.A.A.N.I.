@@ -16,6 +16,7 @@ from audio_buffer import AudioRingBuffer
 from dsp import analyze_audio_window
 from voiceprint import voiceprint_manager
 from deepfake_detector import deepfake_detector
+from transcriber import streaming_transcriber
 
 app = FastAPI(
     title="VAANI Backend",
@@ -71,6 +72,7 @@ def set_mode(req: ModeRequest):
     if req.mode not in ["legitimate", "attack"]:
         raise HTTPException(status_code=400, detail="Invalid mode. Must be 'legitimate' or 'attack'.")
     state.mode = req.mode
+    streaming_transcriber.reset()
     return {"status": "ok", "mode": state.mode}
 
 @app.get("/api/voiceprints")
@@ -227,6 +229,7 @@ async def audio_websocket_endpoint(websocket: WebSocket):
     )
     packet_count = 0
     session_id = str(uuid.uuid4())[:8]
+    streaming_transcriber.reset()
 
     try:
         while True:
@@ -288,6 +291,17 @@ async def audio_websocket_endpoint(websocket: WebSocket):
                     else:
                         intent_score = 0.05 if dsp_results["is_speech"] else 0.01
 
+                    # ── Phase 5: Streaming Speech-to-Text (Whisper) ──
+                    stt_event = await streaming_transcriber.ingest_chunk(
+                        samples=samples,
+                        is_speech=dsp_results["is_speech"],
+                        mode=state.mode,
+                    )
+                    current_transcript = streaming_transcriber.current_text or (
+                        "You need to approve this transfer immediately..." if state.mode == "attack"
+                        else "Listening on microphone stream..."
+                    )
+
                     # 3-Tier Risk Fusion:
                     # Risk = w1*(Acoustic_Fake_Prob) + w2*(1 - Speaker_Match) + w3*(Intent_Score)
                     w1, w2, w3 = 0.45, 0.30, 0.25
@@ -310,7 +324,7 @@ async def audio_websocket_endpoint(websocket: WebSocket):
                     inference_latency_ms = round((time.perf_counter() - start_time) * 1000, 1)
                     buf_stats = ring_buffer.get_stats()
 
-                    # Phase 3 & 4 telemetry payload — Dual Independent Signals
+                    # Phase 3, 4 & 5 telemetry payload — Dual Signals + Streaming Transcript
                     telemetry_payload = {
                         "type": "telemetry",
                         "sessionId": session_id,
@@ -336,6 +350,10 @@ async def audio_websocket_endpoint(websocket: WebSocket):
                         "speaker_match": speaker_match,
                         "bioMatch": speaker_match,
                         "cfo_identity_match": "CFO Confirmed" if (speaker_match >= 0.70 and state.mode != "attack") else "Speaker Impersonator / Mismatch",
+                        # ── Phase 5: Streaming Partial Transcript ──
+                        "text": current_transcript,
+                        "transcript": current_transcript,
+                        "sttEvent": stt_event,
                         # Intent & Risk
                         "intentScore": round(intent_score, 3),
                         "risk": round(raw_risk, 1),

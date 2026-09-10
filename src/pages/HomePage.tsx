@@ -206,11 +206,19 @@ export function HomePage() {
           </div>
         </GlassCard>
         <GlassCard className="p-5">
-          <div className="text-[11px] uppercase tracking-[0.16em] text-neutral-500">
-            Streaming transcript
+          <div className="flex items-center justify-between">
+            <div className="text-[11px] uppercase tracking-[0.16em] text-neutral-500">
+              Streaming transcript
+            </div>
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-blue-500/10 px-2 py-0.5 text-[10px] font-semibold text-blue-700">
+              <span className="h-1.5 w-1.5 rounded-full bg-blue-500 animate-pulse" />
+              Faster-Whisper (INT8)
+            </span>
           </div>
-          <p className="mt-4 text-[15px] leading-7 text-neutral-800">{telemetry.transcript}</p>
-          <p className="mt-6 text-[12px] leading-5 text-neutral-500">
+          <p className="mt-4 min-h-[4.5rem] text-[15px] font-medium italic leading-7 text-neutral-800">
+            "{telemetry.transcript}"
+          </p>
+          <p className="mt-4 text-[12px] leading-5 text-neutral-500">
             Phase discontinuity {Math.round(telemetry.phaseDiscontinuity * 100)}% · shimmer{' '}
             {telemetry.shimmer.toFixed(2)} · policy {policy.wAcoustic.toFixed(2)} /{' '}
             {policy.wBiometric.toFixed(2)} / {policy.wIntent.toFixed(2)}
