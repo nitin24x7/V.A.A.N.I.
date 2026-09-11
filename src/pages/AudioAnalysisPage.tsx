@@ -29,6 +29,18 @@ type ForensicsResult = {
   is_cfo_match: boolean
   cfo_identity_match: string
   enrolled_speaker: string
+  composite_risk?: number
+  threat_level?: string
+  fusion?: {
+    risk: number
+    level: string
+    formula: string
+    contributions: {
+      acoustic: number
+      biometric: number
+      intent: number
+    }
+  }
   transcript?: string
   intent_risk?: number
   risk_level?: 'LOW' | 'MEDIUM' | 'HIGH'
@@ -55,7 +67,7 @@ type ForensicsResult = {
 }
 
 export function AudioAnalysisPage() {
-  const { voiceprint } = useSession()
+  const { voiceprint, policy } = useSession()
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
   const [audioUrl, setAudioUrl] = useState<string | null>(null)
   const [analyzing, setAnalyzing] = useState(false)
@@ -507,6 +519,91 @@ export function AudioAnalysisPage() {
                   )}
                 </div>
               </div>
+
+              {/* Phase 7: Multi-Signal Risk Fusion Outcome */}
+              {(() => {
+                const norm = (policy.wAcoustic + policy.wBiometric + policy.wIntent) || 1.0
+                const acousticContrib = result.fusion?.contributions?.acoustic ?? Math.round(((policy.wAcoustic * result.acoustic_fake_probability) / norm) * 1000) / 10
+                const bioGap = Math.max(0, 1.0 - result.speaker_match)
+                const bioContrib = result.fusion?.contributions?.biometric ?? Math.round(((policy.wBiometric * bioGap) / norm) * 1000) / 10
+                const intentScore = result.intent_risk ?? 0
+                const intentContrib = result.fusion?.contributions?.intent ?? Math.round(((policy.wIntent * intentScore) / norm) * 1000) / 10
+                const calculatedRisk = result.fusion?.risk ?? Math.min(100.0, Math.max(0.0, Math.round((acousticContrib + bioContrib + intentContrib) * 10) / 10))
+                const formula = result.fusion?.formula ?? `${policy.wAcoustic.toFixed(2)}*A + ${policy.wBiometric.toFixed(2)}*(1-B) + ${policy.wIntent.toFixed(2)}*I`
+                const level = result.fusion?.level ?? (calculatedRisk >= policy.criticalMin ? 'critical' : calculatedRisk > policy.lowMax ? 'medium' : 'low')
+
+                return (
+                  <div className="rounded-2xl border border-blue-200/80 bg-gradient-to-br from-neutral-900 to-neutral-950 p-5 text-white shadow-md">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[11px] font-semibold uppercase tracking-wider text-blue-400 flex items-center gap-1.5">
+                        <Cpu size={13} className="text-blue-400" />
+                        Phase 7 · Multi-Signal Risk Fusion
+                      </span>
+                      <span
+                        className={`rounded px-2 py-0.5 text-[10px] font-bold tracking-wider uppercase ${
+                          level === 'critical'
+                            ? 'bg-red-500/20 text-red-400 border border-red-500/30 animate-pulse'
+                            : level === 'medium'
+                            ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30'
+                            : 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                        }`}
+                      >
+                        {level.toUpperCase()} THREAT
+                      </span>
+                    </div>
+
+                    <div className="mt-3 flex items-baseline justify-between">
+                      <div>
+                        <div className="text-xs text-neutral-400">Fused Composite Risk</div>
+                        <div className="text-3xl font-extrabold font-mono text-white">
+                          Risk {Math.round(calculatedRisk)}
+                          <span className="text-sm font-normal text-neutral-400 ml-1.5">
+                            ({calculatedRisk.toFixed(1)} / 100)
+                          </span>
+                        </div>
+                      </div>
+                      <div className="text-right text-xs text-neutral-400 font-mono">
+                        {formula}
+                      </div>
+                    </div>
+
+                    {/* Multi-segment contribution bar */}
+                    <div className="mt-3">
+                      <div className="flex h-3 w-full overflow-hidden rounded-full bg-neutral-800 p-0.5 gap-0.5">
+                        <div
+                          className="h-full rounded-full bg-blue-500 transition-all duration-500"
+                          style={{ width: `${Math.max(2, acousticContrib)}%` }}
+                          title={`Acoustic: +${acousticContrib.toFixed(1)} pts`}
+                        />
+                        <div
+                          className="h-full rounded-full bg-emerald-500 transition-all duration-500"
+                          style={{ width: `${Math.max(2, bioContrib)}%` }}
+                          title={`Biometric Gap: +${bioContrib.toFixed(1)} pts`}
+                        />
+                        <div
+                          className="h-full rounded-full bg-purple-500 transition-all duration-500"
+                          style={{ width: `${Math.max(2, intentContrib)}%` }}
+                          title={`Intent: +${intentContrib.toFixed(1)} pts`}
+                        />
+                      </div>
+                      <div className="mt-2 flex items-center justify-between text-[10px] text-neutral-400">
+                        <span className="flex items-center gap-1">
+                          <span className="h-1.5 w-1.5 rounded-full bg-blue-400" />
+                          Acoustic: +{acousticContrib.toFixed(1)} pts
+                        </span>
+                        <span className="flex items-center gap-1">
+                          <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
+                          Bio Gap: +{bioContrib.toFixed(1)} pts
+                        </span>
+                        <span className="flex items-center gap-1">
+                          <span className="h-1.5 w-1.5 rounded-full bg-purple-400" />
+                          Intent: +{intentContrib.toFixed(1)} pts
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                )
+              })()}
 
               {/* Combined Verdict Alert */}
               <div

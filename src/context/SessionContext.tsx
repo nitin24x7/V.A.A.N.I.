@@ -49,6 +49,7 @@ type SessionState = {
   setAudioIngestMode: (m: AudioIngestMode) => void
   sessionSummary: SessionSummary | null
   clearSessionSummary: () => void
+  loadPreset: (presetName: string) => Promise<void>
 }
 
 const SessionContext = createContext<SessionState | null>(null)
@@ -76,6 +77,62 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const [sessionSummary, setSessionSummary] = useState<SessionSummary | null>(null)
   const clearSessionSummary = useCallback(() => setSessionSummary(null), [])
   const lastCritAt = useRef(0)
+
+  // Synchronize policy configuration from backend on mount
+  useEffect(() => {
+    fetch('/api/policy')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (data?.weights && data?.thresholds) {
+          setPolicy({
+            wAcoustic: data.weights.w_acoustic,
+            wBiometric: data.weights.w_biometric,
+            wIntent: data.weights.w_intent,
+            lowMax: data.thresholds.low_max,
+            criticalMin: data.thresholds.critical_min,
+          })
+        }
+      })
+      .catch(() => {})
+  }, [])
+
+  const handleSetPolicy = useCallback((newPolicy: Policy) => {
+    setPolicy(newPolicy)
+    fetch('/api/policy', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        wAcoustic: newPolicy.wAcoustic,
+        wBiometric: newPolicy.wBiometric,
+        wIntent: newPolicy.wIntent,
+        lowMax: newPolicy.lowMax,
+        criticalMin: newPolicy.criticalMin,
+      }),
+    }).catch(() => {})
+    audioService.updatePolicy(newPolicy)
+  }, [])
+
+  const loadPreset = useCallback(async (presetName: string) => {
+    try {
+      const res = await fetch(`/api/policy/preset/${presetName}`, { method: 'POST' })
+      if (res.ok) {
+        const data = await res.json()
+        if (data?.weights && data?.thresholds) {
+          const updated: Policy = {
+            wAcoustic: data.weights.w_acoustic,
+            wBiometric: data.weights.w_biometric,
+            wIntent: data.weights.w_intent,
+            lowMax: data.thresholds.low_max,
+            criticalMin: data.thresholds.critical_min,
+          }
+          setPolicy(updated)
+          audioService.loadPreset(presetName)
+        }
+      }
+    } catch (e) {
+      console.warn('Failed to activate policy preset on backend:', e)
+    }
+  }, [])
 
   const enroll = useCallback(async (name: string, role: string, durationSec: number, samples?: number[]) => {
     let embedding = makeEmbedding()
@@ -155,6 +212,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
             return {
               ...prev,
               risk: telemetryUpdate.risk ?? prev.risk,
+              fusion: raw.fusion || prev.fusion,
               acousticFake: telemetryUpdate.acousticFake ?? prev.acousticFake,
               bioMatch: telemetryUpdate.bioMatch ?? prev.bioMatch,
               intentScore: telemetryUpdate.intentScore ?? prev.intentScore,
@@ -302,7 +360,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const value = useMemo<SessionState>(
     () => ({
       policy,
-      setPolicy,
+      setPolicy: handleSetPolicy,
+      loadPreset,
       voiceprint,
       enroll,
       clearEnrollment,
@@ -330,6 +389,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     }),
     [
       policy,
+      handleSetPolicy,
+      loadPreset,
       voiceprint,
       enroll,
       clearEnrollment,

@@ -48,12 +48,39 @@ export type SessionSummary = {
   bioMatch: number
 }
 
+export type FusionDetails = {
+  risk: number
+  level: ThreatLevel
+  formula: string
+  contributions: {
+    acoustic: number
+    biometric: number
+    intent: number
+  }
+  normalized_signals?: {
+    acoustic_fake: number
+    speaker_match: number
+    bio_penalty: number
+    intent_score: number
+  }
+  weights: {
+    w_acoustic: number
+    w_biometric: number
+    w_intent: number
+  }
+  thresholds?: {
+    low_max: number
+    critical_min: number
+  }
+}
+
 export type Telemetry = {
   ts: number
   acousticFake: number
   bioMatch: number
   intentScore: number
   risk: number
+  fusion?: FusionDetails
   latencyMs: number
   phaseDiscontinuity: number
   jitterHz: number
