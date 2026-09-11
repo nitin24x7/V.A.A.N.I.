@@ -1,4 +1,4 @@
-import type { AudioIngestMode, SessionSummary, Telemetry } from '../types'
+import type { AudioIngestMode, Policy, SessionSummary, Telemetry } from '../types'
 
 export type AudioTelemetryCallback = (telemetry: Partial<Telemetry> & { rawData?: any }) => void
 export type WaveformCallback = (data: Float32Array, rmsDb: number) => void
@@ -299,6 +299,30 @@ function downsampleTo16k(input: Float32Array, inputSampleRate: number): Float32A
   public setSource(source: string) {
     if (this.socket && this.socket.readyState === WebSocket.OPEN) {
       this.socket.send(JSON.stringify({ command: 'set_source', source }))
+    }
+  }
+
+  public updatePolicy(policy: Policy) {
+    if (this.socket && this.socket.readyState === WebSocket.OPEN) {
+      this.socket.send(JSON.stringify({
+        command: 'update_policy',
+        policy: {
+          wAcoustic: policy.wAcoustic,
+          wBiometric: policy.wBiometric,
+          wIntent: policy.wIntent,
+          lowMax: policy.lowMax,
+          criticalMin: policy.criticalMin,
+        },
+      }))
+    }
+  }
+
+  public loadPreset(presetName: string) {
+    if (this.socket && this.socket.readyState === WebSocket.OPEN) {
+      this.socket.send(JSON.stringify({
+        command: 'load_preset',
+        preset: presetName,
+      }))
     }
   }
 

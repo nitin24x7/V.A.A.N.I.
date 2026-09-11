@@ -1,11 +1,15 @@
+import { useState } from 'react'
 import {
+  ArrowDown,
   Bot,
   Clock,
+  Cpu,
   FileText,
   Headphones,
   Mic,
   Monitor,
   ShieldCheck,
+  SlidersHorizontal,
   Sparkles,
   Timer,
   Waves,
@@ -52,6 +56,8 @@ export function HomePage() {
     telemetry,
     history,
     policy,
+    setPolicy,
+    loadPreset,
     mode,
     setMode,
     voiceprint,
@@ -64,6 +70,9 @@ export function HomePage() {
     sessionSummary,
     clearSessionSummary,
   } = useSession()
+
+  const [showWeights, setShowWeights] = useState(false)
+  const [activePreset, setActivePreset] = useState<string>('balanced')
 
   const level = threatFromRisk(telemetry.risk, policy)
   const chart = history.map((h, i) => ({
@@ -103,7 +112,7 @@ export function HomePage() {
             </div>
             <StatusPill level={live ? level : 'low'} />
           </div>
-          <RiskGauge value={live ? telemetry.risk : 4.2} />
+          <RiskGauge value={live ? telemetry.risk : 0.0} />
           <p className="mt-1 text-center text-[12px] text-neutral-500">
             Fusion · 250 ms sliding window
           </p>
@@ -272,6 +281,318 @@ export function HomePage() {
           </div>
         </GlassCard>
       </div>
+
+      {/* Phase 7 — Multi-Signal Risk Fusion Engine */}
+      <GlassCard className="p-6 border-blue-200/40 bg-gradient-to-br from-white via-neutral-50/50 to-white shadow-xs">
+        {/* Header with Title & Action Controls */}
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-neutral-200/60 pb-4">
+          <div className="flex items-center gap-3">
+            <div className="rounded-xl bg-blue-500/10 p-2.5 text-blue-600">
+              <Cpu size={22} />
+            </div>
+            <div>
+              <div className="text-[15px] font-semibold text-neutral-900 flex items-center gap-2">
+                Phase 7 · Multi-Signal Risk Fusion Engine
+                <span className="rounded-full bg-blue-500/10 px-2.5 py-0.5 text-[10px] font-semibold text-blue-700">
+                  {telemetry.fusion?.formula || `${policy.wAcoustic.toFixed(2)}*Acoustic + ${policy.wBiometric.toFixed(2)}*(1-Bio) + ${policy.wIntent.toFixed(2)}*Intent`}
+                </span>
+              </div>
+              <div className="text-xs text-neutral-500">
+                Mathematical fusion across AASIST Neural Vocoders, ECAPA Speaker Identity, and Meta Llama 3.2 1B
+              </div>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            {/* Quick Presets */}
+            <div className="flex items-center rounded-lg border border-neutral-200/80 bg-neutral-50/80 p-0.5 text-[11px]">
+              {[
+                { id: 'balanced', label: 'Balanced 50/30/20' },
+                { id: 'anti_spoof', label: 'Anti-Spoof 70/20/10' },
+                { id: 'biometric_strict', label: 'Biometric 20/60/20' },
+                { id: 'social_eng', label: 'Intent 20/20/60' },
+              ].map((p) => (
+                <button
+                  key={p.id}
+                  type="button"
+                  onClick={() => {
+                    setActivePreset(p.id)
+                    loadPreset(p.id)
+                  }}
+                  className={`rounded-md px-2.5 py-1 font-medium transition ${
+                    activePreset === p.id
+                      ? 'bg-white shadow-xs text-neutral-900 font-semibold'
+                      : 'text-neutral-500 hover:text-neutral-800'
+                  }`}
+                >
+                  {p.label}
+                </button>
+              ))}
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setShowWeights(!showWeights)}
+              className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-semibold transition ${
+                showWeights
+                  ? 'border-blue-300 bg-blue-50 text-blue-700'
+                  : 'border-neutral-200 bg-white text-neutral-700 hover:bg-neutral-50'
+              }`}
+            >
+              <SlidersHorizontal size={13} />
+              {showWeights ? 'Hide Sliders' : 'Tune Weights'}
+            </button>
+          </div>
+        </div>
+
+        {/* Dynamic Weight Sliders (Collapsible) */}
+        {showWeights && (
+          <div className="mt-4 rounded-xl border border-neutral-200/80 bg-neutral-50/50 p-4 transition-all">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-xs font-semibold text-neutral-800">
+                Custom Signal Weights (Auto-Normalized to 100%)
+              </span>
+              <span className="text-[11px] text-neutral-500">
+                Sum: {(policy.wAcoustic + policy.wBiometric + policy.wIntent).toFixed(2)}
+              </span>
+            </div>
+            <div className="grid gap-4 md:grid-cols-3">
+              <div>
+                <div className="flex justify-between text-[11px] mb-1">
+                  <span className="font-medium text-neutral-700">w1 · Acoustic Deepfake</span>
+                  <span className="font-semibold text-blue-600">{(policy.wAcoustic * 100).toFixed(0)}% ({policy.wAcoustic.toFixed(2)})</span>
+                </div>
+                <input
+                  type="range"
+                  min={0}
+                  max={1}
+                  step={0.05}
+                  value={policy.wAcoustic}
+                  onChange={(e) => {
+                    setActivePreset('custom')
+                    setPolicy({ ...policy, wAcoustic: Number(e.target.value) })
+                  }}
+                  className="w-full accent-blue-600"
+                />
+              </div>
+              <div>
+                <div className="flex justify-between text-[11px] mb-1">
+                  <span className="font-medium text-neutral-700">w2 · Biometric Mismatch (1 - Match)</span>
+                  <span className="font-semibold text-emerald-600">{(policy.wBiometric * 100).toFixed(0)}% ({policy.wBiometric.toFixed(2)})</span>
+                </div>
+                <input
+                  type="range"
+                  min={0}
+                  max={1}
+                  step={0.05}
+                  value={policy.wBiometric}
+                  onChange={(e) => {
+                    setActivePreset('custom')
+                    setPolicy({ ...policy, wBiometric: Number(e.target.value) })
+                  }}
+                  className="w-full accent-emerald-600"
+                />
+              </div>
+              <div>
+                <div className="flex justify-between text-[11px] mb-1">
+                  <span className="font-medium text-neutral-700">w3 · Intent & Coercion</span>
+                  <span className="font-semibold text-purple-600">{(policy.wIntent * 100).toFixed(0)}% ({policy.wIntent.toFixed(2)})</span>
+                </div>
+                <input
+                  type="range"
+                  min={0}
+                  max={1}
+                  step={0.05}
+                  value={policy.wIntent}
+                  onChange={(e) => {
+                    setActivePreset('custom')
+                    setPolicy({ ...policy, wIntent: Number(e.target.value) })
+                  }}
+                  className="w-full accent-purple-600"
+                />
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* 3-Signal Flow Pipeline (Visual Architecture) */}
+        <div className="mt-5 grid gap-4 lg:grid-cols-[1fr_auto_1fr]">
+          {/* Left Column: 3 Input Signals */}
+          <div className="space-y-3">
+            {/* Signal 1: Acoustic Fake */}
+            <div className="rounded-xl border border-neutral-200/80 bg-white p-3.5 shadow-2xs">
+              <div className="flex items-center justify-between text-xs">
+                <span className="font-semibold text-neutral-800 flex items-center gap-1.5">
+                  <span className="h-2 w-2 rounded-full bg-blue-600" />
+                  Signal 1 · Acoustic (AASIST)
+                </span>
+                <span className="text-[11px] font-mono text-neutral-500">
+                  w1 = {policy.wAcoustic.toFixed(2)}
+                </span>
+              </div>
+              <div className="mt-2 flex items-baseline justify-between">
+                <span className="text-xl font-bold font-mono">
+                  {telemetry.acousticFake.toFixed(2)}
+                  <span className="text-xs text-neutral-400 font-normal ml-1">
+                    ({Math.round(telemetry.acousticFake * 100)}% fake)
+                  </span>
+                </span>
+                <span className="text-xs font-semibold text-blue-600">
+                  +{((telemetry.fusion?.contributions.acoustic ?? (telemetry.acousticFake * policy.wAcoustic * 100))).toFixed(1)} pts
+                </span>
+              </div>
+              <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-black/5">
+                <div
+                  className="h-full bg-blue-600 transition-all duration-300"
+                  style={{ width: `${Math.min(100, Math.round(telemetry.acousticFake * 100))}%` }}
+                />
+              </div>
+            </div>
+
+            {/* Signal 2: Biometric Gap */}
+            <div className="rounded-xl border border-neutral-200/80 bg-white p-3.5 shadow-2xs">
+              <div className="flex items-center justify-between text-xs">
+                <span className="font-semibold text-neutral-800 flex items-center gap-1.5">
+                  <span className="h-2 w-2 rounded-full bg-emerald-600" />
+                  Signal 2 · Biometric (ECAPA-TDNN)
+                </span>
+                <span className="text-[11px] font-mono text-neutral-500">
+                  w2 = {policy.wBiometric.toFixed(2)}
+                </span>
+              </div>
+              <div className="mt-2 flex items-baseline justify-between">
+                <span className="text-xl font-bold font-mono">
+                  {telemetry.bioMatch.toFixed(2)}
+                  <span className="text-xs text-neutral-400 font-normal ml-1">
+                    (Mismatch: {(Math.max(0, 1 - telemetry.bioMatch)).toFixed(2)})
+                  </span>
+                </span>
+                <span className="text-xs font-semibold text-emerald-600">
+                  +{((telemetry.fusion?.contributions.biometric ?? (Math.max(0, 1 - telemetry.bioMatch) * policy.wBiometric * 100))).toFixed(1)} pts
+                </span>
+              </div>
+              <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-black/5">
+                <div
+                  className="h-full bg-emerald-600 transition-all duration-300"
+                  style={{ width: `${Math.min(100, Math.round(Math.max(0, 1 - telemetry.bioMatch) * 100))}%` }}
+                />
+              </div>
+            </div>
+
+            {/* Signal 3: Intent Score */}
+            <div className="rounded-xl border border-neutral-200/80 bg-white p-3.5 shadow-2xs">
+              <div className="flex items-center justify-between text-xs">
+                <span className="font-semibold text-neutral-800 flex items-center gap-1.5">
+                  <span className="h-2 w-2 rounded-full bg-purple-600" />
+                  Signal 3 · Intent AI (Llama 3.2)
+                </span>
+                <span className="text-[11px] font-mono text-neutral-500">
+                  w3 = {policy.wIntent.toFixed(2)}
+                </span>
+              </div>
+              <div className="mt-2 flex items-baseline justify-between">
+                <span className="text-xl font-bold font-mono">
+                  {(telemetry.intentScore || 0).toFixed(2)}
+                  <span className="text-xs text-neutral-400 font-normal ml-1">
+                    ({Math.round((telemetry.intentScore || 0) * 100)}% risk)
+                  </span>
+                </span>
+                <span className="text-xs font-semibold text-purple-600">
+                  +{((telemetry.fusion?.contributions.intent ?? ((telemetry.intentScore || 0) * policy.wIntent * 100))).toFixed(1)} pts
+                </span>
+              </div>
+              <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-black/5">
+                <div
+                  className="h-full bg-purple-600 transition-all duration-300"
+                  style={{ width: `${Math.min(100, Math.round((telemetry.intentScore || 0) * 100))}%` }}
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* Middle Divider / Directional Connectors */}
+          <div className="hidden lg:flex flex-col items-center justify-center px-2 text-neutral-300">
+            <div className="h-full w-px bg-gradient-to-b from-transparent via-neutral-300 to-transparent" />
+            <div className="my-2 rounded-full border border-neutral-300 bg-white p-1 text-neutral-500 shadow-xs">
+              <ArrowDown size={14} />
+            </div>
+            <div className="h-full w-px bg-gradient-to-b from-transparent via-neutral-300 to-transparent" />
+          </div>
+
+          {/* Right Column: Risk Engine Convergence Box */}
+          <div className="flex flex-col justify-between rounded-xl border border-neutral-800 bg-neutral-950 p-5 text-white shadow-md">
+            <div>
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-semibold uppercase tracking-wider text-neutral-400">
+                  Fused Multi-Modal Outcome
+                </span>
+                <StatusPill level={live ? level : 'low'} />
+              </div>
+
+              <div className="mt-4 flex items-baseline justify-between">
+                <div>
+                  <div className="text-xs text-neutral-400 uppercase tracking-wider">Composite Threat</div>
+                  <div className="text-4xl font-extrabold tracking-tight font-mono text-white">
+                    Risk {Math.round(live ? telemetry.risk : 0)}
+                  </div>
+                </div>
+                <div className="text-right">
+                  <div className="text-xs text-neutral-400">Normalized Scale</div>
+                  <div className="text-sm font-semibold text-neutral-200">0 – 100 / 100</div>
+                </div>
+              </div>
+
+              {/* Fused Contribution Breakdown Bar */}
+              <div className="mt-4">
+                <div className="flex justify-between text-[11px] text-neutral-400 mb-1.5">
+                  <span>Signal Composition</span>
+                  <span className="font-mono">{telemetry.fusion?.formula || '0.50*A + 0.30*(1-B) + 0.20*I'}</span>
+                </div>
+                <div className="flex h-3 w-full overflow-hidden rounded-full bg-neutral-800 p-0.5 gap-0.5">
+                  <div
+                    className="h-full rounded-full bg-blue-500 transition-all duration-500"
+                    style={{ width: `${Math.max(2, (telemetry.fusion?.contributions.acoustic ?? 0))}%` }}
+                    title={`Acoustic: +${(telemetry.fusion?.contributions.acoustic ?? 0).toFixed(1)} pts`}
+                  />
+                  <div
+                    className="h-full rounded-full bg-emerald-500 transition-all duration-500"
+                    style={{ width: `${Math.max(2, (telemetry.fusion?.contributions.biometric ?? 0))}%` }}
+                    title={`Biometric Mismatch: +${(telemetry.fusion?.contributions.biometric ?? 0).toFixed(1)} pts`}
+                  />
+                  <div
+                    className="h-full rounded-full bg-purple-500 transition-all duration-500"
+                    style={{ width: `${Math.max(2, (telemetry.fusion?.contributions.intent ?? 0))}%` }}
+                    title={`Intent: +${(telemetry.fusion?.contributions.intent ?? 0).toFixed(1)} pts`}
+                  />
+                </div>
+                <div className="mt-2 flex items-center justify-between text-[10px] text-neutral-400">
+                  <span className="flex items-center gap-1">
+                    <span className="h-1.5 w-1.5 rounded-full bg-blue-400" />
+                    Acoustic: +{(telemetry.fusion?.contributions.acoustic ?? 0).toFixed(1)}
+                  </span>
+                  <span className="flex items-center gap-1">
+                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
+                    Bio Gap: +{(telemetry.fusion?.contributions.biometric ?? 0).toFixed(1)}
+                  </span>
+                  <span className="flex items-center gap-1">
+                    <span className="h-1.5 w-1.5 rounded-full bg-purple-400" />
+                    Intent: +{(telemetry.fusion?.contributions.intent ?? 0).toFixed(1)}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-4 rounded-lg border border-neutral-800 bg-neutral-900/90 p-3 text-xs text-neutral-300">
+              <span className="font-semibold text-white">Decision Action:</span>{' '}
+              {level === 'critical'
+                ? 'CRITICAL RISK: Automatic transfer freeze engaged. Dual-authorization required.'
+                : level === 'medium'
+                ? 'MEDIUM RISK: In-band visual advisory active. Verification recommended.'
+                : 'LOW RISK: Routine business dialogue. Green banking workflows cleared.'}
+            </div>
+          </div>
+        </div>
+      </GlassCard>
 
       {/* Historical Telemetry Chart & Streaming Transcript */}
       <div className="grid gap-4 lg:grid-cols-[1.4fr_0.8fr]">

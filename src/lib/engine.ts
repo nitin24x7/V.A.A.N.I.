@@ -1,9 +1,9 @@
 import type { CallMode, Policy, Telemetry, ThreatLevel } from '../types'
 
 export const DEFAULT_POLICY: Policy = {
-  wAcoustic: 0.42,
-  wBiometric: 0.33,
-  wIntent: 0.25,
+  wAcoustic: 0.50,
+  wBiometric: 0.30,
+  wIntent: 0.20,
   lowMax: 30,
   criticalMin: 70,
 }
@@ -36,10 +36,12 @@ export function fuseRisk(
   intentScore: number,
   policy: Policy,
 ) {
+  const sum = policy.wAcoustic + policy.wBiometric + policy.wIntent
+  const norm = sum > 0 ? sum : 1
   const raw =
-    policy.wAcoustic * acousticFake +
-    policy.wBiometric * (1 - bioMatch) +
-    policy.wIntent * intentScore
+    (policy.wAcoustic * acousticFake +
+     policy.wBiometric * (1 - bioMatch) +
+     policy.wIntent * intentScore) / norm
   return Math.round(clamp(raw) * 1000) / 10
 }
 
@@ -75,6 +77,31 @@ export function sampleTelemetry(mode: CallMode, policy: Policy): Telemetry {
     ? 0.0
     : fuseRisk(acousticFake, bioMatch, intentScore, policy)
 
+  const sum = policy.wAcoustic + policy.wBiometric + policy.wIntent
+  const norm = sum > 0 ? sum : 1.0
+
+  const fusion = idle
+    ? {
+        risk: 0.0,
+        level: 'low' as ThreatLevel,
+        formula: `${policy.wAcoustic.toFixed(2)}*Acoustic + ${policy.wBiometric.toFixed(2)}*(1-Bio) + ${policy.wIntent.toFixed(2)}*Intent`,
+        contributions: { acoustic: 0.0, biometric: 0.0, intent: 0.0 },
+        weights: { w_acoustic: policy.wAcoustic, w_biometric: policy.wBiometric, w_intent: policy.wIntent },
+        thresholds: { low_max: policy.lowMax, critical_min: policy.criticalMin },
+      }
+    : {
+        risk,
+        level: threatFromRisk(risk, policy),
+        formula: `${policy.wAcoustic.toFixed(2)}*Acoustic + ${policy.wBiometric.toFixed(2)}*(1-Bio) + ${policy.wIntent.toFixed(2)}*Intent`,
+        contributions: {
+          acoustic: Math.round(((policy.wAcoustic * acousticFake) / norm) * 1000) / 10,
+          biometric: Math.round(((policy.wBiometric * (1 - bioMatch)) / norm) * 1000) / 10,
+          intent: Math.round(((policy.wIntent * intentScore) / norm) * 1000) / 10,
+        },
+        weights: { w_acoustic: policy.wAcoustic, w_biometric: policy.wBiometric, w_intent: policy.wIntent },
+        thresholds: { low_max: policy.lowMax, critical_min: policy.criticalMin },
+      }
+
   const snippets = attack ? ATTACK_SNIPPETS : idle ? ['Awaiting live audio stream...'] : LEGIT_SNIPPETS
 
   return {
@@ -83,6 +110,7 @@ export function sampleTelemetry(mode: CallMode, policy: Policy): Telemetry {
     bioMatch,
     intentScore,
     risk,
+    fusion,
     latencyMs: idle ? 0 : Math.round(210 + Math.random() * 110),
     phaseDiscontinuity: idle ? 0.0 : attack ? clamp(0.86 + noise(0.12)) : clamp(0.08 + noise(0.06)),
     jitterHz: idle ? 0.0 : attack ? clamp(1.6 + Math.random() * 1.4, 0, 12) : clamp(8.4 + noise(1.6), 6, 12),

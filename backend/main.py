@@ -18,6 +18,7 @@ from voiceprint import voiceprint_manager
 from deepfake_detector import deepfake_detector
 from transcriber import streaming_transcriber, get_whisper_model
 from intent_analyzer import get_intent_analyzer
+from risk_engine import get_risk_engine
 
 app = FastAPI(
     title="VAANI Backend",
@@ -26,6 +27,7 @@ app = FastAPI(
 )
 
 intent_analyzer = get_intent_analyzer()
+risk_engine = get_risk_engine()
 
 app.add_middleware(
     CORSMiddleware,
@@ -97,6 +99,57 @@ def analyze_intent(req: IntentRequest):
     Supports optional local SLM reasoning via Ollama (Llama 3.2).
     """
     return intent_analyzer.analyze(req.text, mode=req.mode or "legitimate", use_slm=bool(req.use_slm))
+
+class PolicyUpdateRequest(BaseModel):
+    w_acoustic: Optional[float] = None
+    w_biometric: Optional[float] = None
+    w_intent: Optional[float] = None
+    wAcoustic: Optional[float] = None
+    wBiometric: Optional[float] = None
+    wIntent: Optional[float] = None
+    low_max: Optional[float] = None
+    lowMax: Optional[float] = None
+    critical_min: Optional[float] = None
+    criticalMin: Optional[float] = None
+    preset: Optional[str] = None
+
+@app.get("/api/policy")
+def get_policy():
+    """
+    Phase 7: Retrieve current risk fusion policy, weights, and presets.
+    """
+    return risk_engine.get_policy()
+
+@app.post("/api/policy")
+def update_policy(req: PolicyUpdateRequest):
+    """
+    Phase 7: Dynamically update risk fusion weights and thresholds.
+    Accepts snake_case or camelCase keys.
+    """
+    w_a = req.w_acoustic if req.w_acoustic is not None else req.wAcoustic
+    w_b = req.w_biometric if req.w_biometric is not None else req.wBiometric
+    w_i = req.w_intent if req.w_intent is not None else req.wIntent
+    low = req.low_max if req.low_max is not None else req.lowMax
+    crit = req.critical_min if req.critical_min is not None else req.criticalMin
+
+    return risk_engine.update_policy(
+        w_acoustic=w_a,
+        w_biometric=w_b,
+        w_intent=w_i,
+        low_max=low,
+        critical_min=crit,
+        preset=req.preset,
+    )
+
+@app.post("/api/policy/preset/{preset_name}")
+def activate_preset(preset_name: str):
+    """
+    Phase 7: Switch to a predefined policy profile.
+    """
+    try:
+        return risk_engine.load_preset(preset_name)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 @app.get("/api/voiceprints")
 def get_voiceprints():
@@ -246,6 +299,14 @@ async def analyze_audio_file(file: UploadFile = File(...)):
         except Exception as e:
             print(f"[VAANI] Forensics Llama 3.2 evaluation note: {e}")
 
+    # Phase 7: Multi-Signal Risk Fusion for Forensics
+    forensics_fusion = risk_engine.calculate(
+        acoustic_fake=fake_prob,
+        speaker_match=speaker_match,
+        intent_score=intent_res["intent_risk"],
+        is_speech=True,
+    )
+
     # Classification verdicts
     is_fake = fake_prob >= 0.50
     verdict = "SYNTHETIC VOICE DETECTED" if is_fake else "NATURAL HUMAN SPEECH"
@@ -264,6 +325,10 @@ async def analyze_audio_file(file: UploadFile = File(...)):
         "is_cfo_match": is_cfo,
         "cfo_identity_match": cfo_match,
         "enrolled_speaker": bio_res["name"],
+        # ── Phase 7: Multi-Signal Risk Fusion ──
+        "composite_risk": forensics_fusion["risk"],
+        "threat_level": forensics_fusion["level"],
+        "fusion": forensics_fusion,
         # ── Phase 5 & 6: Transcribed Text & Local Llama 3.2 Intent Forensics ──
         "transcript": uploaded_transcript or "(No vocal speech transcribed)",
         "intent_risk": round(intent_res["intent_risk"], 3),
@@ -397,24 +462,15 @@ async def audio_websocket_endpoint(websocket: WebSocket):
                         intent_confidence = 1.0
                         intent_res = {"intent_risk": 0.0, "risk_level": "LOW", "threats": [], "confidence": 1.0}
 
-                    # 3-Tier Risk Fusion:
-                    # Risk = w1*(Acoustic_Fake_Prob) + w2*(1 - Speaker_Match) + w3*(Intent_Risk)
-                    w1, w2, w3 = 0.45, 0.30, 0.25
-                    bio_penalty = max(0.0, 1.0 - speaker_match)
-
-                    if not dsp_results["is_speech"]:
-                        raw_risk = 0.0
-                        level = "low"
-                    else:
-                        raw_risk = (w1 * acoustic_fake + w2 * bio_penalty + w3 * intent_risk) * 100.0
-                        raw_risk = max(1.0, min(99.0, raw_risk))
-                        if raw_risk >= 70.0:
-                            level = "critical"
-                        elif raw_risk >= 30.0:
-                            level = "medium"
-                        else:
-                            level = "low"
-                        level = "low"
+                    # ── Phase 7: Multi-Signal Risk Fusion Engine ──
+                    fusion_res = risk_engine.calculate(
+                        acoustic_fake=acoustic_fake,
+                        speaker_match=speaker_match,
+                        intent_score=intent_risk,
+                        is_speech=dsp_results["is_speech"],
+                    )
+                    raw_risk = fusion_res["risk"]
+                    level = fusion_res["level"]
 
                     inference_latency_ms = round((time.perf_counter() - start_time) * 1000, 1)
                     buf_stats = ring_buffer.get_stats()
@@ -464,6 +520,7 @@ async def audio_websocket_endpoint(websocket: WebSocket):
                         # Composite Risk
                         "risk": round(raw_risk, 1),
                         "level": level,
+                        "fusion": fusion_res,
                         "latencyMs": inference_latency_ms,
                         "mode": state.mode,
                         "source": state.source,
@@ -499,9 +556,10 @@ async def audio_websocket_endpoint(websocket: WebSocket):
                             "id": f"INC-{int(time.time()) % 10000:04d}",
                             "ts": time.time() * 1000,
                             "level": "critical",
+                            "title": "Autonomous Risk Interception: Critical Threat Detected",
+                            "detail": f"Fused Risk: {round(raw_risk, 1)}/100 · {fusion_res.get('formula')}{threat_desc}{reasoning_desc}",
                             "source": state.source,
                             "risk": round(raw_risk, 1),
-                            "detail": f"Synthetic voice clone detected (Acoustic Fake: {round(acoustic_fake*100, 1)}%, Speaker Match: {round(speaker_match*100, 1)}%){threat_desc}{reasoning_desc}",
                         }
                         state.incidents.append(inc)
 
@@ -517,12 +575,37 @@ async def audio_websocket_endpoint(websocket: WebSocket):
                     elif cmd == "set_source":
                         state.source = data.get("source", state.source)
                         await websocket.send_json({"type": "source_changed", "source": state.source})
+                    elif cmd == "update_policy":
+                        p = data.get("policy", {})
+                        updated = risk_engine.update_policy(
+                            w_acoustic=p.get("w_acoustic", p.get("wAcoustic")),
+                            w_biometric=p.get("w_biometric", p.get("wBiometric")),
+                            w_intent=p.get("w_intent", p.get("wIntent")),
+                            low_max=p.get("low_max", p.get("lowMax")),
+                            critical_min=p.get("critical_min", p.get("criticalMin")),
+                            preset=p.get("preset"),
+                        )
+                        await websocket.send_json({"type": "policy_updated", "policy": updated})
+                    elif cmd == "load_preset":
+                        preset_name = data.get("preset", "balanced")
+                        try:
+                            updated = risk_engine.load_preset(preset_name)
+                            await websocket.send_json({"type": "policy_updated", "policy": updated})
+                        except ValueError as e:
+                            await websocket.send_json({"type": "error", "detail": str(e)})
                     elif cmd == "speech_transcript" or data.get("type") == "speech_transcript":
                         client_text = data.get("text", "").strip()
                         if client_text:
                             streaming_transcriber.set_live_text(client_text)
                             intent_res = intent_analyzer.analyze(client_text, mode=state.mode)
                             intent_analyzer.trigger_async_slm(client_text)
+
+                            fast_fusion = risk_engine.calculate(
+                                acoustic_fake=0.93 if state.mode == "attack" else 0.04,
+                                speaker_match=0.22 if state.mode == "attack" else 0.94,
+                                intent_score=intent_res["intent_risk"],
+                                is_speech=True,
+                            )
 
                             fast_telemetry = {
                                 "type": "telemetry",
@@ -545,6 +628,9 @@ async def audio_websocket_endpoint(websocket: WebSocket):
                                 "slm_reasoning": intent_res.get("slm_reasoning"),
                                 "speechEngine": "browser_instant",
                                 "latencyMs": 15.0,
+                                "risk": fast_fusion["risk"],
+                                "level": fast_fusion["level"],
+                                "fusion": fast_fusion,
                             }
                             await websocket.send_json(fast_telemetry)
                     elif cmd == "get_session_summary":
