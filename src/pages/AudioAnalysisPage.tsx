@@ -1,6 +1,7 @@
 import { useState, useRef, type ChangeEvent, type DragEvent } from 'react'
 import {
   AlertTriangle,
+  Bot,
   CheckCircle2,
   Cpu,
   FileAudio,
@@ -28,6 +29,13 @@ type ForensicsResult = {
   is_cfo_match: boolean
   cfo_identity_match: string
   enrolled_speaker: string
+  transcript?: string
+  intent_risk?: number
+  risk_level?: 'LOW' | 'MEDIUM' | 'HIGH'
+  threats?: string[]
+  slm_reasoning?: string
+  slm_status?: string
+  confidence?: number
   features: {
     f0: number
     jitter: number
@@ -40,6 +48,8 @@ type ForensicsResult = {
   ml_models: {
     deepfake_detector: string
     speaker_verifier: string
+    asr_engine?: string
+    intent_agent?: string
     inference_ms: number
   }
 }
@@ -418,37 +428,123 @@ export function AudioAnalysisPage() {
                     />
                   </div>
                 </div>
+
+                {/* Signal 3: AI Intent & Social-Engineering Forensics (Meta Llama 3.2 1B) */}
+                <div className="rounded-2xl border border-purple-200/80 bg-purple-50/20 p-4">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] font-semibold uppercase tracking-wider text-purple-700 flex items-center gap-1.5">
+                      <Bot size={13} className="text-purple-600" />
+                      Signal 3 · AI Intent & Social Engineering
+                    </span>
+                    <span
+                      className={`rounded px-2 py-0.5 text-[10px] font-bold tracking-wider uppercase ${
+                        (result.risk_level || 'LOW') === 'HIGH'
+                          ? 'bg-red-100 text-red-700 animate-pulse'
+                          : (result.risk_level || 'LOW') === 'MEDIUM'
+                          ? 'bg-amber-100 text-amber-700'
+                          : 'bg-emerald-100 text-emerald-700'
+                      }`}
+                    >
+                      {result.risk_level || 'LOW'} INTENT RISK
+                    </span>
+                  </div>
+
+                  {/* Transcribed Speech Dialogue */}
+                  <div className="mt-2.5 rounded-xl border border-purple-200/60 bg-white/90 p-3">
+                    <div className="text-[10px] font-semibold uppercase tracking-wider text-purple-600 mb-1">
+                      Faster-Whisper Transcribed Speech:
+                    </div>
+                    <p className="text-xs italic text-neutral-800 leading-relaxed font-mono">
+                      "{result.transcript || 'No vocal speech dialogue detected.'}"
+                    </p>
+                  </div>
+
+                  <div className="mt-3 flex items-baseline justify-between">
+                    <span className="text-2xl font-bold tracking-tight text-purple-950">
+                      {Math.round((result.intent_risk ?? 0) * 100)}%
+                    </span>
+                    <span className="text-xs text-purple-600">
+                      Local SLM: {result.slm_status || 'Meta Llama 3.2 1B'}
+                    </span>
+                  </div>
+
+                  <div className="mt-2 h-2 overflow-hidden rounded-full bg-black/5">
+                    <div
+                      className={`h-full transition-all duration-500 ${
+                        (result.intent_risk ?? 0) >= 0.65
+                          ? 'bg-gradient-to-r from-red-600 to-rose-500'
+                          : (result.intent_risk ?? 0) >= 0.30
+                          ? 'bg-amber-500'
+                          : 'bg-emerald-500'
+                      }`}
+                      style={{ width: `${Math.round((result.intent_risk ?? 0) * 100)}%` }}
+                    />
+                  </div>
+
+                  {/* Detected Tactics */}
+                  {result.threats && result.threats.length > 0 && (
+                    <div className="mt-3 flex flex-wrap items-center gap-1.5 pt-2 border-t border-purple-200/40">
+                      <span className="text-[10px] font-medium uppercase tracking-wider text-purple-600">
+                        Tactics:
+                      </span>
+                      {result.threats.map((t) => (
+                        <span
+                          key={t}
+                          className="rounded bg-red-500/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-red-700"
+                        >
+                          {t.replace(/_/g, ' ')}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Llama 3.2 Reasoning */}
+                  {result.slm_reasoning && (
+                    <div className="mt-2.5 rounded-lg border border-purple-200/80 bg-purple-50/60 p-2 text-[11px] text-purple-900 leading-relaxed">
+                      <span className="font-semibold text-purple-800">🦙 Llama 3.2 Security Rationale:</span>{' '}
+                      {result.slm_reasoning}
+                    </div>
+                  )}
+                </div>
               </div>
 
               {/* Combined Verdict Alert */}
               <div
                 className={`rounded-2xl border p-4 ${
-                  result.is_fake && !result.is_cfo_match
+                  result.is_fake || (result.intent_risk ?? 0) >= 0.65 || !result.is_cfo_match
                     ? 'border-red-200 bg-red-50/80 text-red-900'
-                    : !result.is_fake && result.is_cfo_match
+                    : !result.is_fake && result.is_cfo_match && (result.intent_risk ?? 0) < 0.30
                     ? 'border-emerald-200 bg-emerald-50/80 text-emerald-900'
                     : 'border-amber-200 bg-amber-50/80 text-amber-900'
                 }`}
               >
                 <div className="flex items-start gap-3">
-                  {result.is_fake && !result.is_cfo_match ? (
+                  {result.is_fake || (result.intent_risk ?? 0) >= 0.65 ? (
                     <AlertTriangle className="mt-0.5 shrink-0 text-red-600" size={18} />
                   ) : (
                     <CheckCircle2 className="mt-0.5 shrink-0 text-emerald-600" size={18} />
                   )}
                   <div>
                     <div className="text-xs font-bold uppercase tracking-wider">
-                      {result.is_fake && !result.is_cfo_match
-                        ? 'CRITICAL SECURITY ALERT: High Impersonation Risk'
-                        : !result.is_fake && result.is_cfo_match
+                      {result.is_fake && (result.intent_risk ?? 0) >= 0.65
+                        ? 'CRITICAL SECURITY THREAT: Synthetic Deepfake + Wire Fraud Attack'
+                        : result.is_fake
+                        ? 'CRITICAL SECURITY ALERT: Synthetic Voice Clone Detected'
+                        : (result.intent_risk ?? 0) >= 0.65
+                        ? 'HIGH INTENT RISK: Social-Engineering Manipulation Detected'
+                        : result.is_cfo_match
                         ? 'GENUINE EXECUTIVE CONFIRMED'
                         : 'ANOMALY DETECTED'}
                     </div>
                     <p className="mt-1 text-xs leading-5 opacity-90">
-                      {result.is_fake && !result.is_cfo_match
-                        ? 'AASIST detected neural vocoder phase artifacts and ECAPA-TDNN confirmed biometric mismatch with the enrolled CFO. Payment workflows should remain locked.'
-                        : !result.is_fake && result.is_cfo_match
-                        ? 'Natural physiological micro-tremors verified and biometric cosine similarity exceeds 0.70 threshold. Voice confirmed authentic.'
+                      {result.is_fake && (result.intent_risk ?? 0) >= 0.65
+                        ? 'AASIST detected neural vocoder phase artifacts and Llama 3.2 flagged coercive wire transfer pressure. Payment workflows locked.'
+                        : result.is_fake
+                        ? 'AASIST detected neural vocoder phase artifacts and ECAPA-TDNN confirmed biometric mismatch with the enrolled executive.'
+                        : (result.intent_risk ?? 0) >= 0.65
+                        ? 'Llama 3.2 flagged coercive social-engineering pressure and verification bypass attempts in the conversation dialogue.'
+                        : result.is_cfo_match
+                        ? 'Natural physiological micro-tremors verified, biometric similarity confirmed, and conversation intent is benign.'
                         : 'Mixed forensic signals detected. Manual verification recommended.'}
                     </p>
                   </div>
