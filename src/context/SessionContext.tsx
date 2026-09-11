@@ -11,11 +11,13 @@ import {
 import { sampleTelemetry, threatFromRisk, DEFAULT_POLICY } from '../lib/engine'
 import { audioService } from '../lib/audioService'
 import type {
+  AudioIngestMode,
   CallMode,
   DemoStep,
   Incident,
   IngestSource,
   Policy,
+  SessionSummary,
   Telemetry,
   Voiceprint,
 } from '../types'
@@ -29,7 +31,7 @@ type SessionState = {
   mode: CallMode
   setMode: (m: CallMode) => void
   live: boolean
-  startCall: (source?: IngestSource) => Promise<void>
+  startCall: (source?: IngestSource, ingestMode?: AudioIngestMode) => Promise<void>
   stopCall: () => void
   source: IngestSource
   telemetry: Telemetry
@@ -43,6 +45,10 @@ type SessionState = {
   micRmsDb: number
   micWaveformData: Float32Array | null
   backendConnected: boolean
+  audioIngestMode: AudioIngestMode
+  setAudioIngestMode: (m: AudioIngestMode) => void
+  sessionSummary: SessionSummary | null
+  clearSessionSummary: () => void
 }
 
 const SessionContext = createContext<SessionState | null>(null)
@@ -66,6 +72,9 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const [micRmsDb, setMicRmsDb] = useState(-100)
   const [micWaveformData, setMicWaveformData] = useState<Float32Array | null>(null)
   const [backendConnected, setBackendConnected] = useState(false)
+  const [audioIngestMode, setAudioIngestMode] = useState<AudioIngestMode>('mic')
+  const [sessionSummary, setSessionSummary] = useState<SessionSummary | null>(null)
+  const clearSessionSummary = useCallback(() => setSessionSummary(null), [])
   const lastCritAt = useRef(0)
 
   const enroll = useCallback(async (name: string, role: string, durationSec: number, samples?: number[]) => {
@@ -110,12 +119,15 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     setDemoStep(0)
   }, [])
 
-  const startCall = useCallback(async (nextSource: IngestSource = 'webrtc') => {
+  const startCall = useCallback(async (nextSource: IngestSource = 'webrtc', ingestModeOverride?: AudioIngestMode) => {
     setSource(nextSource)
     setLive(true)
+    setSessionSummary(null)
     setMode((current) => (current === 'idle' ? 'legitimate' : current))
 
-    // Ingest audio from microphone when using WebRTC source
+    const activeIngest = ingestModeOverride || audioIngestMode
+
+    // Ingest audio from microphone/tab when using WebRTC source
     if (nextSource === 'webrtc') {
       const ok = await audioService.startStream(
         (telemetryUpdate) => {
@@ -129,13 +141,16 @@ export function SessionProvider({ children }: { children: ReactNode }) {
             let vocoderHint = prev.vocoderHint
             if (mlModel?.type === 'aasist') {
               vocoderHint = fakePct > 50
-                ? `SYNTHETIC VOICE DETECTED (${fakePct.toFixed(0)}%)`
+                 ? `SYNTHETIC VOICE DETECTED (${fakePct.toFixed(0)}%)`
                 : `Natural speech verified (${(100 - fakePct).toFixed(0)}% genuine)`
             } else if ((raw.phaseDiscontinuity || 0) > 0.35) {
               vocoderHint = 'HiFi-GAN / Diffusion artifact'
             } else {
               vocoderHint = 'Natural glottal pulse'
             }
+
+            const threats = raw.threats || (mode === 'attack' ? ['authority_impersonation', 'urgency_manipulation', 'verification_bypass'] : [])
+            const intentRiskLevel = raw.intentRiskLevel || (telemetryUpdate.intentScore && telemetryUpdate.intentScore >= 0.65 ? 'HIGH' : telemetryUpdate.intentScore && telemetryUpdate.intentScore >= 0.3 ? 'MEDIUM' : 'LOW')
 
             return {
               ...prev,
@@ -148,13 +163,25 @@ export function SessionProvider({ children }: { children: ReactNode }) {
               shimmer: raw.shimmer ?? prev.shimmer,
               jitterHz: raw.f0 ?? prev.jitterHz,
               vocoderHint,
-              transcript: raw.text || raw.transcript || prev.transcript,
+              transcript: telemetryUpdate.transcript || raw.text || raw.transcript || prev.transcript,
+              fullTranscript: telemetryUpdate.fullTranscript || raw.fullTranscript || prev.fullTranscript,
+              sessionDurationSec: raw.sessionDurationSec || prev.sessionDurationSec,
+              threats,
+              intentRiskLevel,
+              intentAnalysis: raw.intentAnalysis || prev.intentAnalysis,
+              slmStatus: raw.slm_status || prev.slmStatus,
+              slmReasoning: raw.slm_reasoning || prev.slmReasoning,
+              speechEngine: telemetryUpdate.speechEngine || raw.speechEngine || prev.speechEngine,
             }
           })
         },
         (waveData, rmsDb) => {
           setMicWaveformData(new Float32Array(waveData))
           setMicRmsDb(rmsDb)
+        },
+        activeIngest,
+        (summary) => {
+          setSessionSummary(summary)
         }
       )
       setIsMicActive(ok)
@@ -163,9 +190,25 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       setIsMicActive(false)
       setMicWaveformData(null)
     }
-  }, [])
+  }, [audioIngestMode, mode])
 
   const stopCall = useCallback(() => {
+    setTelemetry((currentTelem) => {
+      const dur = currentTelem.sessionDurationSec || audioService.getSessionDuration() || 0
+      const fullText = currentTelem.fullTranscript || currentTelem.transcript || 'No speech recorded during session.'
+      setSessionSummary({
+        durationSec: dur,
+        transcript: fullText,
+        intentRisk: currentTelem.intentScore,
+        riskLevel: currentTelem.intentRiskLevel || (currentTelem.intentScore >= 0.65 ? 'HIGH' : currentTelem.intentScore >= 0.3 ? 'MEDIUM' : 'LOW'),
+        threats: currentTelem.threats || [],
+        slmReasoning: currentTelem.slmReasoning,
+        compositeRisk: currentTelem.risk,
+        acousticFake: currentTelem.acousticFake,
+        bioMatch: currentTelem.bioMatch,
+      })
+      return currentTelem
+    })
     audioService.stopStream()
     setIsMicActive(false)
     setMicWaveformData(null)
@@ -217,6 +260,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
           bioMatch: prev.bioMatch * 0.35 + next.bioMatch * 0.65,
           intentScore: prev.intentScore * 0.4 + next.intentScore * 0.6,
           risk: prev.risk * 0.3 + next.risk * 0.7,
+          threats: mode === 'attack' ? ['authority_impersonation', 'urgency_manipulation', 'verification_bypass'] : [],
+          intentRiskLevel: mode === 'attack' ? 'HIGH' : 'LOW',
         }
         blended.risk = Math.round(blended.risk * 10) / 10
         return blended
@@ -278,6 +323,10 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       micRmsDb,
       micWaveformData,
       backendConnected,
+      audioIngestMode,
+      setAudioIngestMode,
+      sessionSummary,
+      clearSessionSummary,
     }),
     [
       policy,
@@ -300,6 +349,9 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       micRmsDb,
       micWaveformData,
       backendConnected,
+      audioIngestMode,
+      sessionSummary,
+      clearSessionSummary,
     ],
   )
 

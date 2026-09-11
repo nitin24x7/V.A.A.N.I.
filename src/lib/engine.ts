@@ -54,28 +54,28 @@ export function sampleTelemetry(mode: CallMode, policy: Policy): Telemetry {
   const idle = mode === 'idle'
 
   const acousticFake = idle
-    ? clamp(0.04 + noise(0.03))
+    ? 0.0
     : attack
       ? clamp(0.93 + noise(0.08))
       : clamp(0.04 + noise(0.05))
 
   const bioMatch = idle
-    ? clamp(0.12 + noise(0.04))
+    ? 0.0
     : attack
       ? clamp(0.18 + noise(0.12))
       : clamp(0.94 + noise(0.06))
 
   const intentScore = idle
-    ? clamp(0.05 + noise(0.04))
+    ? 0.0
     : attack
       ? clamp(0.88 + noise(0.1))
       : clamp(0.06 + noise(0.05))
 
   const risk = idle
-    ? Math.round((4 + Math.abs(noise(6))) * 10) / 10
+    ? 0.0
     : fuseRisk(acousticFake, bioMatch, intentScore, policy)
 
-  const snippets = attack ? ATTACK_SNIPPETS : idle ? ['Awaiting live PCM frames…'] : LEGIT_SNIPPETS
+  const snippets = attack ? ATTACK_SNIPPETS : idle ? ['Awaiting live audio stream...'] : LEGIT_SNIPPETS
 
   return {
     ts: Date.now(),
@@ -84,10 +84,10 @@ export function sampleTelemetry(mode: CallMode, policy: Policy): Telemetry {
     intentScore,
     risk,
     latencyMs: idle ? 0 : Math.round(210 + Math.random() * 110),
-    phaseDiscontinuity: attack ? clamp(0.86 + noise(0.12)) : clamp(0.08 + noise(0.06)),
-    jitterHz: attack ? clamp(1.6 + Math.random() * 1.4, 0, 12) : clamp(8.4 + noise(1.6), 6, 12),
-    shimmer: attack ? clamp(0.08 + noise(0.04)) : clamp(0.32 + noise(0.08)),
-    transcript: snippets[Math.floor(Math.random() * snippets.length)],
-    vocoderHint: attack ? 'HiFi-GAN / diffusion vocoder signature' : 'Natural glottal source',
+    phaseDiscontinuity: idle ? 0.0 : attack ? clamp(0.86 + noise(0.12)) : clamp(0.08 + noise(0.06)),
+    jitterHz: idle ? 0.0 : attack ? clamp(1.6 + Math.random() * 1.4, 0, 12) : clamp(8.4 + noise(1.6), 6, 12),
+    shimmer: idle ? 0.0 : attack ? clamp(0.08 + noise(0.04)) : clamp(0.32 + noise(0.08)),
+    transcript: idle ? '' : snippets[Math.floor(Math.random() * snippets.length)],
+    vocoderHint: idle ? 'Awaiting audio input' : attack ? 'HiFi-GAN / diffusion vocoder signature' : 'Natural glottal source',
   }
 }

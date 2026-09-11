@@ -29,6 +29,26 @@ V.A.A.N.I. is an active, low-latency call interception engine operating over liv
    - Non-blocking streaming transcription via `asyncio.to_thread` worker thread pool.
    - VAD-gated speech accumulator buffer emitting real-time partial transcripts without blocking the 250ms audio forensic stride.
    - Emits streaming partial payload: `{"text": "You need to approve this transfer immediately...", "transcript": "..."}`.
+6. **Phase 6 — AI-Powered Intent & Social-Engineering Analysis Agent**:
+   - **Middleman AI Agent** (`backend/intent_analyzer.py`): Real-time analysis of the rolling Whisper transcript to intercept social-engineering manipulation.
+   - **6-Vector Threat Detection**:
+     1. Authority/identity impersonation (CFO, CEO, Board, Legal)
+     2. Urgency and pressure tactics (Immediately, penalty fees, emergency)
+     3. Requests for sensitive information (OTP, credentials, MFA)
+     4. Attempts to bypass verification (Bypass dual-authorization, off the record)
+     5. Financial or credential manipulation (Wire transfers, offshore escrow)
+     6. Inconsistencies in conversation (Channel deviation, abnormal pretexts)
+   - Real-time sub-millisecond CPU evaluation (< 5ms) + pluggable local SLM hook (Llama 3.2 1B/3B via Ollama / llama.cpp).
+   - Structured Output Schema:
+     ```json
+     {
+       "intent_risk": 0.87,
+       "risk_level": "HIGH",
+       "threats": ["authority_impersonation", "urgency_manipulation", "verification_bypass"],
+       "confidence": 0.91
+     }
+     ```
+   - Live threat badges and automated risk fusion integration into telemetry and incident logs.
 
 ---
 
@@ -133,7 +153,8 @@ Vaani/
 │   ├── audio_buffer.py       # 1.0s circular ring buffer with 250ms stride & normalizer
 │   ├── deepfake_detector.py  # AASIST PyTorch deepfake detection wrapper
 │   ├── dsp.py                # VAD, F0 pitch tracking, jitter, shimmer, spectral flux
-│   ├── main.py               # FastAPI REST & WebSocket server (/ws/audio, /enroll, /api/analyze-audio)
+│   ├── intent_analyzer.py    # AI-powered intent & social engineering agent (<5ms CPU)
+│   ├── main.py               # FastAPI REST & WebSocket server (/ws/audio, /enroll, /api/analyze-intent)
 │   ├── requirements.txt      # Python dependencies
 │   ├── transcriber.py        # Faster-Whisper streaming partial speech-to-text engine
 │   ├── voiceprint.py         # ECAPA-TDNN 192-d speaker verifier & profile vault
@@ -147,6 +168,8 @@ Vaani/
 │   ├── lib/                  # Audio ingestion service (ScriptProcessorNode Int16)
 │   ├── pages/                # Dashboard, Audio Forensics, Enrollment, Call, Sources, SIEM pages
 │   └── types.ts              # TypeScript contracts for telemetry & incidents
+├── tests/
+│   └── test_phase6_intent.py # Automated test suite for AI intent analysis
 ├── public/                   # Static assets & brand logo
 ├── package.json              # Node scripts & dependencies
 └── vite.config.ts            # Vite config with /api and /ws backend proxy

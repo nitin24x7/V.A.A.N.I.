@@ -76,7 +76,7 @@ def compute_spectral_flux(audio: np.ndarray, sample_rate: int = 16000, frame_ms:
 def detect_voice_activity(
     audio: np.ndarray,
     sample_rate: int = 16000,
-    threshold_db: float = -42.0,
+    threshold_db: float = -55.0,
 ) -> tuple[bool, dict]:
     """
     Multi-feature Voice Activity Detection (VAD).
@@ -92,7 +92,7 @@ def detect_voice_activity(
     """
     rms, db = compute_rms_and_db(audio)
 
-    # Feature 1: Energy gate
+    # Feature 1: Energy gate (calibrated for standard mic levels)
     energy_pass = db >= threshold_db
 
     # Feature 2: Zero-Crossing Rate
@@ -100,7 +100,7 @@ def detect_voice_activity(
         zcr = float(np.mean(np.abs(np.diff(np.sign(audio)))) / 2.0)
     else:
         zcr = 0.0
-    zcr_pass = 0.01 <= zcr <= 0.45
+    zcr_pass = 0.01 <= zcr <= 0.50
 
     # Feature 3: Spectral flux
     spectral_flux_val = compute_spectral_flux(audio, sample_rate)
@@ -117,7 +117,7 @@ def detect_voice_activity(
         band_ratio = 0.0
 
     # Decision: majority vote with energy as hard gate
-    is_speech = energy_pass and (zcr_pass or band_ratio > 0.3 or spectral_flux_val > 5.0)
+    is_speech = energy_pass and (zcr_pass or band_ratio > 0.20 or spectral_flux_val > 2.0)
 
     vad_features = {
         "rms_db": db,
@@ -284,7 +284,7 @@ def analyze_audio_window(
             "shimmer": 0.0,
             "spectral_centroid": 0.0,
             "phase_discontinuity": 0.0,
-            "acoustic_fake_prob": 0.02,
+            "acoustic_fake_prob": 0.0,
             "vad": vad_features,
         }
 

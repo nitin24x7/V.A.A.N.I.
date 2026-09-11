@@ -10,12 +10,19 @@ Features:
   - Contextual awareness: produces realistic wire-transfer fraud dialogue during simulated attack calls.
 """
 
+import sys
 import os
 import time
+import re
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
 import numpy as np
+
+# Ensure backend/deps is always accessible
+deps_dir = os.path.join(os.path.dirname(__file__), "deps")
+if os.path.exists(deps_dir) and deps_dir not in sys.path:
+    sys.path.insert(0, deps_dir)
 
 # Global faster-whisper model instance
 _whisper_model = None
@@ -25,10 +32,9 @@ _model_load_attempted = False
 def get_whisper_model():
     """Lazily load faster-whisper model on CPU (INT8)."""
     global _whisper_model, _model_load_attempted
-    if _whisper_model is not None or _model_load_attempted:
+    if _whisper_model is not None:
         return _whisper_model
 
-    _model_load_attempted = True
     try:
         from faster_whisper import WhisperModel
         print("[VAANI] Loading Faster-Whisper (tiny.en, INT8 CPU)...")
@@ -36,10 +42,11 @@ def get_whisper_model():
             "tiny.en",
             device="cpu",
             compute_type="int8",
-            cpu_threads=2,
+            cpu_threads=8,
             num_workers=1,
         )
-        print("[VAANI] ✅ Faster-Whisper tiny.en loaded successfully for real-time STT")
+        _model_load_attempted = True
+        print("[VAANI] ✅ Faster-Whisper tiny.en loaded successfully for real-time STT (8 CPU threads)")
     except Exception as e:
         print(f"[VAANI] Note: Faster-Whisper not active ({e}). Using streaming contextual transcriber.")
         _whisper_model = None
@@ -57,9 +64,9 @@ class StreamingTranscriber:
     def __init__(
         self,
         sample_rate: int = 16000,
-        min_speech_duration_sec: float = 0.8,
-        partial_interval_sec: float = 0.5,
-        silence_timeout_sec: float = 0.7,
+        min_speech_duration_sec: float = 0.25,
+        partial_interval_sec: float = 0.20,
+        silence_timeout_sec: float = 0.30,
     ):
         self.sample_rate = sample_rate
         self.min_samples = int(sample_rate * min_speech_duration_sec)
@@ -71,12 +78,14 @@ class StreamingTranscriber:
 
         # Speech accumulation state
         self.speech_buffer: list[np.ndarray] = []
+        self.pending_samples: list[np.ndarray] = []
         self.speech_sample_count: int = 0
         self.silence_sample_count: int = 0
         self.samples_since_last_partial: int = 0
 
         # Concurrency & result state
         self.is_transcribing: bool = False
+        self.session_transcript: str = ""
         self.current_text: str = ""
         self.last_final_text: str = ""
         self.partial_count: int = 0
@@ -102,13 +111,23 @@ class StreamingTranscriber:
         self.legitimate_phrase_idx = 0
         self.legitimate_word_idx = 0
 
+    def feed_samples(self, samples: np.ndarray):
+        """Feed every incoming audio packet into the transcriber so no frames are dropped."""
+        if len(samples) > 0:
+            self.pending_samples.append(samples.copy())
+
     def _sync_transcribe(self, audio: np.ndarray) -> str:
-        """Run Whisper inference on CPU."""
+        """Run Whisper inference on CPU with artifact stripping."""
         model = get_whisper_model()
-        if model is None:
+        if model is None or len(audio) < 1600:
             return ""
 
         try:
+            if audio.ndim > 1:
+                audio = audio.flatten()
+            if audio.dtype != np.float32:
+                audio = audio.astype(np.float32)
+
             segments, _ = model.transcribe(
                 audio,
                 beam_size=1,
@@ -116,57 +135,71 @@ class StreamingTranscriber:
                 language="en",
                 temperature=0.0,
                 condition_on_previous_text=False,
-                vad_filter=False,
+                vad_filter=False,  # DSP already performs multi-band VAD
+                no_speech_threshold=0.5,
                 without_timestamps=True,
             )
-            text = " ".join(s.text.strip() for s in segments).strip()
-            return text
+            raw_text = " ".join(s.text.strip() for s in segments).strip()
+
+            # Clean bracketed tags like [music], (whispering), [blank_audio]
+            cleaned = re.sub(r"\[.*?\]", "", raw_text)
+            cleaned = re.sub(r"\(.*?\)", "", cleaned).strip()
+
+            # Filter out tiny-model phantom artifacts
+            lower = cleaned.lower().strip(".,!?\"' ")
+            if lower in ("", "you", "thank you", "thank you.", "bye", "bye.", "the", "a", "so", "oh", "subtitles", "subtitles by"):
+                return ""
+            return cleaned
         except Exception as e:
             print(f"[VAANI] STT error: {e}")
             return ""
 
+    def set_live_text(self, text: str):
+        """Directly update live transcript from client speech recognition."""
+        cleaned = (text or "").strip()
+        if cleaned:
+            self.session_transcript = cleaned
+            self.current_text = cleaned
+            self.last_update_ts = time.time()
+
     async def ingest_chunk(
         self,
-        samples: np.ndarray,
+        samples: Optional[np.ndarray],
         is_speech: bool,
         mode: str = "legitimate",
     ) -> Optional[dict]:
         """
-        Ingest a streaming audio chunk (e.g. 250ms).
+        Ingest a streaming audio chunk (e.g. 250ms stride).
         Returns transcript event dict if text changed, or None.
         """
-        n = len(samples)
+        # Drain all pending samples received from WebSocket packets
+        if self.pending_samples:
+            incoming = np.concatenate(self.pending_samples)
+            self.pending_samples.clear()
+        elif samples is not None and len(samples) > 0:
+            incoming = samples.copy()
+        else:
+            incoming = np.array([], dtype=np.float32)
 
-        # ── Simulated Attack Scenario Dialogue ──
-        if mode == "attack":
-            self.partial_count += 1
-            if self.partial_count % 2 == 0:  # Update every ~500ms
-                phrase = self.attack_phrases[self.attack_phrase_idx % len(self.attack_phrases)]
-                words = phrase.split()
-                self.attack_word_idx = min(len(words), self.attack_word_idx + 2)
-                partial_text = " ".join(words[:self.attack_word_idx])
-                if self.attack_word_idx >= len(words):
-                    self.attack_word_idx = 0
-                    self.attack_phrase_idx += 1
-
-                self.current_text = partial_text
-                return {
-                    "type": "transcript",
-                    "text": partial_text,
-                    "transcript": partial_text,
-                    "is_final": self.attack_word_idx == 0,
-                    "model": "Faster-Whisper (INT8 Streaming)",
-                }
+        n = len(incoming)
+        if n == 0:
             return None
 
-        # ── Live Audio / Genuine Speech Processing ──
+        # ── Live Audio Speech Processing ──
         if is_speech:
-            self.speech_buffer.append(samples.copy())
+            self.speech_buffer.append(incoming)
             self.speech_sample_count += n
             self.silence_sample_count = 0
             self.samples_since_last_partial += n
 
-            # Trigger partial transcription if minimum duration reached
+            # Cap rolling speech buffer to 10 seconds to keep CPU inference fast
+            max_rolling_samples = self.sample_rate * 10
+            if self.speech_sample_count > max_rolling_samples:
+                while len(self.speech_buffer) > 1 and self.speech_sample_count > self.sample_rate * 6:
+                    removed = self.speech_buffer.pop(0)
+                    self.speech_sample_count -= len(removed)
+
+            # Trigger partial transcription if minimum speech window reached
             if (
                 self.speech_sample_count >= self.min_samples
                 and self.samples_since_last_partial >= self.partial_interval_samples
@@ -178,6 +211,10 @@ class StreamingTranscriber:
         else:
             # Silence detected
             if self.speech_sample_count > 0:
+                # Keep small trailing audio so final syllable isn't chopped
+                if len(self.speech_buffer) < 40:
+                    self.speech_buffer.append(incoming)
+                    self.speech_sample_count += n
                 self.silence_sample_count += n
 
                 # If silence exceeds timeout, finalize utterance
@@ -211,11 +248,12 @@ class StreamingTranscriber:
                     self.legitimate_phrase_idx += 1
 
             if text:
-                self.current_text = text
+                full_text = f"{self.session_transcript} {text}".strip() if self.session_transcript else text
+                self.current_text = full_text
                 return {
                     "type": "transcript",
-                    "text": text,
-                    "transcript": text,
+                    "text": full_text,
+                    "transcript": full_text,
                     "is_final": False,
                     "model": "Faster-Whisper (INT8 Streaming)" if model else "Contextual ASR Engine",
                 }
@@ -228,6 +266,8 @@ class StreamingTranscriber:
         """Finalize speech utterance and clear speech buffer."""
         self.is_transcribing = True
         try:
+            if not self.speech_buffer:
+                return None
             snapshot = np.concatenate(self.speech_buffer).astype(np.float32)
 
             model = get_whisper_model()
@@ -244,12 +284,17 @@ class StreamingTranscriber:
             self.samples_since_last_partial = 0
 
             if text:
+                if self.session_transcript:
+                    if not self.session_transcript.endswith(text):
+                        self.session_transcript = f"{self.session_transcript} {text}".strip()
+                else:
+                    self.session_transcript = text.strip()
                 self.last_final_text = text
-                self.current_text = text
+                self.current_text = self.session_transcript
                 return {
                     "type": "transcript",
-                    "text": text,
-                    "transcript": text,
+                    "text": self.session_transcript,
+                    "transcript": self.session_transcript,
                     "is_final": True,
                     "model": "Faster-Whisper (INT8 Streaming)" if model else "Contextual ASR Engine",
                 }
@@ -261,10 +306,12 @@ class StreamingTranscriber:
     def reset(self):
         """Reset transcriber state."""
         self.speech_buffer.clear()
+        self.pending_samples.clear()
         self.speech_sample_count = 0
         self.silence_sample_count = 0
         self.samples_since_last_partial = 0
         self.is_transcribing = False
+        self.session_transcript = ""
         self.current_text = ""
         self.attack_word_idx = 0
         self.attack_phrase_idx = 0

@@ -37,22 +37,47 @@ export function Waveform({
 
       const micData = latestData.current
 
+      // Calculate instantaneous root-mean-square to detect true speech vs room silence
+      let localRms = 0
+      if (active && micData && micData.length > 0) {
+        let sum = 0
+        for (let j = 0; j < micData.length; j++) {
+          sum += micData[j] * micData[j]
+        }
+        localRms = Math.sqrt(sum / micData.length)
+      }
+
+      // Voice activity threshold: ambient room noise typically sits below 0.009 (~ -41 dB)
+      const hasSpeechEnergy = active && localRms >= 0.009
+      const voiceEnergy = hasSpeechEnergy ? Math.min(1.0, (localRms - 0.009) * 5.5) : 0.0
+
       for (let i = 0; i < bars; i++) {
-        let h = 4
+        let h = 3.5
 
         if (active && micData && micData.length > 0) {
-          // Sample actual microphone audio waveform
-          const sampleIndex = Math.floor((i / bars) * micData.length)
-          const sampleVal = Math.abs(micData[sampleIndex] || 0)
-          h = Math.max(4, Math.min(height, sampleVal * height * 2.8 + 6))
+          if (!hasSpeechEnergy) {
+            // Ambient quiet / silence: clean resting flatline with tiny breathing micro-movement
+            const micro = Math.sin(t.current * 0.5 + i * 0.2) * 0.4
+            h = Math.max(3, 3.5 + micro)
+          } else {
+            // Real speech detected: average a frequency/temporal window to avoid single-sample spikes
+            const chunkStart = Math.floor((i / bars) * micData.length)
+            const chunkSize = Math.max(1, Math.floor(micData.length / bars))
+            let chunkSum = 0
+            for (let c = 0; c < chunkSize; c++) {
+              chunkSum += Math.abs(micData[Math.min(micData.length - 1, chunkStart + c)] || 0)
+            }
+            const barVal = chunkSum / chunkSize
+            const dynamicScale = barVal * (height * 0.85) * voiceEnergy
+            h = Math.max(3.5, Math.min(height - 4, 3.5 + dynamicScale + (voiceEnergy * 8)))
+          }
+        } else if (active) {
+          // Streaming active but waiting for packets: clean flatline
+          h = 3.5
         } else {
-          // Synthetic ambient animation
-          const n =
-            Math.sin(t.current + i * 0.22) * 0.45 +
-            Math.sin(t.current * 1.7 + i * 0.09) * 0.35 +
-            Math.sin(i * 0.8) * 0.12
-          const amp = active ? Math.max(0.08, intensity) : 0.08
-          h = Math.max(4, Math.abs(n) * height * amp * 1.6 + (active ? 6 : 3))
+          // Idle standby mode: subtle gentle ambient breathe (3px - 7px)
+          const n = Math.sin(t.current + i * 0.2) * 0.5 + 0.5
+          h = 3 + n * 4
         }
 
         const x = i * (barW + gap)
@@ -60,18 +85,18 @@ export function Waveform({
 
         if (alert) {
           ctx.fillStyle = 'rgba(214,31,58,0.85)'
-        } else if (active && micData) {
-          // Matching brand gradient colors for active live mic
+        } else if (hasSpeechEnergy) {
+          // Dynamic brand gradient when user is actively speaking
           const grad = ctx.createLinearGradient(0, y, 0, y + h)
           grad.addColorStop(0, '#004ee8')
           grad.addColorStop(1, '#00bfa5')
           ctx.fillStyle = grad
         } else {
-          ctx.fillStyle = active ? 'rgba(0, 78, 232, 0.75)' : 'rgba(10,10,10,0.6)'
+          ctx.fillStyle = active ? 'rgba(0, 78, 232, 0.45)' : 'rgba(10,10,10,0.3)'
         }
 
         ctx.beginPath()
-        ctx.roundRect(x, y, barW, h, 3)
+        ctx.roundRect(x, y, barW, h, 2)
         ctx.fill()
       }
       raf.current = requestAnimationFrame(draw)
