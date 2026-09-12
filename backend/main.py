@@ -20,6 +20,7 @@ from transcriber import streaming_transcriber, get_whisper_model
 from intent_analyzer import get_intent_analyzer
 from risk_engine import get_risk_engine
 from intervention_engine import get_intervention_engine
+from telephony_simulator import run_robustness_suite
 
 app = FastAPI(
     title="VAANI Backend",
@@ -174,6 +175,24 @@ def dismiss_intervention_api():
     Phase 8: Acknowledge and dismiss the active intervention.
     """
     return intervention_engine.dismiss()
+
+@app.post("/api/telephony-robustness")
+async def telephony_robustness(file: UploadFile = File(...)):
+    """
+    Phase 9: Telephony Robustness Evaluation.
+    Applies 7 degradation transforms (clean, 8kHz, G.711 μ-law, G.711 A-law,
+    noise, reverb, packet loss) and runs AASIST detection on each variant.
+    """
+    file_bytes = await file.read()
+    if len(file_bytes) == 0:
+        raise HTTPException(status_code=400, detail="Empty audio file uploaded.")
+
+    audio, sr = decode_audio_bytes(file_bytes, file.filename or "audio.wav")
+    if len(audio) < 1600:
+        raise HTTPException(status_code=400, detail="Audio file too short for analysis.")
+
+    result = run_robustness_suite(audio, sample_rate=sr)
+    return result
 
 @app.get("/api/voiceprints")
 def get_voiceprints():

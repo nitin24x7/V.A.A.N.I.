@@ -10,6 +10,7 @@ import { IncidentsPage } from './pages/IncidentsPage'
 import { PolicyPage } from './pages/PolicyPage'
 import { SourcesPage } from './pages/SourcesPage'
 import { ArchitecturePage } from './pages/ArchitecturePage'
+import { TelephonyRobustnessPage } from './pages/TelephonyRobustnessPage'
 
 export default function App() {
   return (
@@ -27,6 +28,7 @@ export default function App() {
             <Route path="/incidents" element={<IncidentsPage />} />
             <Route path="/sources" element={<SourcesPage />} />
             <Route path="/policy" element={<PolicyPage />} />
+            <Route path="/telephony" element={<TelephonyRobustnessPage />} />
             <Route path="/architecture" element={<ArchitecturePage />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Route>
