@@ -43,11 +43,12 @@ env/
 backend_venv/
 backend/deps/
 
-# Model Checkpoints (weights auto-downloaded on first run)
+# Model Checkpoints & Caches (weights auto-downloaded on first run)
 backend/models/weights/*.pth
 backend/models/weights/*.pt
 backend/models/weights/*.bin
 backend/models/weights/*.onnx
+backend/models/cache/
 
 # Editor & OS files
 .vscode/*

@@ -76,7 +76,7 @@ export function PolicyPage() {
           <div>
             <div className="inline-flex items-center gap-2 rounded-full border border-black/10 bg-white/60 px-3 py-1 text-[11px] uppercase tracking-[0.16em] text-neutral-500">
               <Cpu size={14} className="text-blue-600" />
-              Phase 7 · Multi-Signal Risk Engine
+              Multi-Signal Risk Engine
             </div>
             <h1 className="mt-2 text-2xl font-bold tracking-tight md:text-3xl text-neutral-900">
               Risk Fusion Policy & Thresholds

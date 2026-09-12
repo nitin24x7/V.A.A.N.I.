@@ -13,12 +13,13 @@ from typing import Optional
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'deps'))
 
 from audio_buffer import AudioRingBuffer
-from dsp import analyze_audio_window
+from dsp import analyze_audio_window, analyze_full_audio
 from voiceprint import voiceprint_manager
 from deepfake_detector import deepfake_detector
 from transcriber import streaming_transcriber, get_whisper_model
 from intent_analyzer import get_intent_analyzer
 from risk_engine import get_risk_engine
+from intervention_engine import get_intervention_engine
 
 app = FastAPI(
     title="VAANI Backend",
@@ -28,6 +29,7 @@ app = FastAPI(
 
 intent_analyzer = get_intent_analyzer()
 risk_engine = get_risk_engine()
+intervention_engine = get_intervention_engine()
 
 app.add_middleware(
     CORSMiddleware,
@@ -151,6 +153,28 @@ def activate_preset(preset_name: str):
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+@app.get("/api/intervention")
+def get_intervention_status():
+    """
+    Phase 8: Retrieve current intervention state and history.
+    """
+    return intervention_engine.get_status()
+
+@app.post("/api/intervention/trigger")
+def trigger_intervention_api():
+    """
+    Phase 8: Manually trigger the critical intervention scenario:
+    AI Voice 91%, Identity Match 34%, Intent Risk 87% -> Threat Score 82/100.
+    """
+    return intervention_engine.trigger_simulation(session_id="api-trigger")
+
+@app.post("/api/intervention/dismiss")
+def dismiss_intervention_api():
+    """
+    Phase 8: Acknowledge and dismiss the active intervention.
+    """
+    return intervention_engine.dismiss()
+
 @app.get("/api/voiceprints")
 def get_voiceprints():
     profiles = []
@@ -165,8 +189,9 @@ def get_voiceprints():
     return {"voiceprints": profiles}
 
 def decode_audio_bytes(file_bytes: bytes, filename: str = "") -> tuple[np.ndarray, int]:
-    """Decodes wav or audio bytes into 16kHz mono float32 numpy array."""
+    """Decodes mp3, wav, or any audio bytes into 16kHz mono float32 numpy array."""
     import io
+
     # 1. Standard WAV decode via scipy
     try:
         from scipy.io import wavfile
@@ -188,7 +213,39 @@ def decode_audio_bytes(file_bytes: bytes, filename: str = "") -> tuple[np.ndarra
     except Exception:
         pass
 
-    # 2. Torchaudio decode
+    # 2. Universal ffmpeg decode (reliable for mp3, m4a, ogg, aac, flac, webm, etc.)
+    try:
+        import subprocess
+        proc = subprocess.Popen(
+            [
+                "ffmpeg",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-i",
+                "pipe:0",
+                "-f",
+                "s16le",
+                "-acodec",
+                "pcm_s16le",
+                "-ar",
+                "16000",
+                "-ac",
+                "1",
+                "pipe:1",
+            ],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        out, _ = proc.communicate(input=file_bytes, timeout=15)
+        if proc.returncode == 0 and len(out) > 0:
+            audio = np.frombuffer(out, dtype=np.int16).astype(np.float32) / 32768.0
+            return audio, 16000
+    except Exception as e:
+        print(f"[VAANI] ffmpeg audio decode note: {e}")
+
+    # 3. Torchaudio decode
     try:
         import torchaudio
         tensor, sr = torchaudio.load(io.BytesIO(file_bytes))
@@ -201,7 +258,7 @@ def decode_audio_bytes(file_bytes: bytes, filename: str = "") -> tuple[np.ndarra
     except Exception:
         pass
 
-    # 3. Fallback: treat as raw PCM 16-bit
+    # 4. Fallback: treat as raw PCM 16-bit
     if len(file_bytes) % 2 == 0:
         return np.frombuffer(file_bytes, dtype=np.int16).astype(np.float32) / 32768.0, 16000
     return np.zeros(16000, dtype=np.float32), 16000
@@ -241,20 +298,21 @@ async def analyze_audio_file(file: UploadFile = File(...)):
     audio, sr = decode_audio_bytes(file_bytes, file.filename or "audio.wav")
     duration_sec = round(len(audio) / sr, 2)
 
-    # 1. AASIST deepfake detection (takes 1.0s window or padded)
-    sample_window = audio[:16000] if len(audio) >= 16000 else audio
-    ml_result = deepfake_detector.predict(sample_window, sample_rate=16000)
+    # 1. AASIST deepfake detection across full audio duration
+    ml_result = deepfake_detector.predict_full_audio(audio, sample_rate=16000)
     fake_prob = ml_result["acoustic_fake_probability"]
 
     # 2. ECAPA-TDNN speaker verification against enrolled executive profile
     bio_res = voiceprint_manager.verify_detailed(audio, sample_rate=16000)
     speaker_match = bio_res["speaker_match"]
 
-    # 3. DSP forensic inspection
-    dsp_res = analyze_audio_window(sample_window, sample_rate=16000)
+    # 3. DSP full-audio forensic inspection (voiced metrics, waveform envelope, FFT spectrum)
+    dsp_res = analyze_full_audio(audio, sample_rate=16000)
 
-    # 4. Phase 5 & 6: Faster-Whisper Speech-to-Text & Meta Llama 3.2 Intent Forensics
+    # 4. Multilingual Faster-Whisper Speech-to-Text & Intent Forensics
     uploaded_transcript = ""
+    detected_language = "en"
+    language_probability = 1.0
     whisper_model = get_whisper_model()
     if whisper_model is not None and len(audio) > 1600:
         try:
@@ -264,15 +322,24 @@ async def analyze_audio_file(file: UploadFile = File(...)):
             else:
                 audio_16k = audio.astype(np.float32)
 
-            segments, _ = whisper_model.transcribe(
-                audio_16k,
+            # Volume normalization for clear Whisper transcription
+            max_amp = float(np.max(np.abs(audio_16k)))
+            audio_for_stt = (audio_16k / max_amp * 0.95) if max_amp > 1e-4 else audio_16k
+
+            segments, info = whisper_model.transcribe(
+                audio_for_stt,
                 beam_size=1,
-                language="en",
+                language=None,  # Auto-detect language (Hindi, English, etc.)
                 without_timestamps=True,
+                condition_on_previous_text=False,
             )
             raw_t = " ".join(s.text.strip() for s in segments).strip()
             import re
             uploaded_transcript = re.sub(r"\[.*?\]|\(.*?\)", "", raw_t).strip()
+            if hasattr(info, "language") and info.language:
+                detected_language = info.language
+            if hasattr(info, "language_probability") and info.language_probability:
+                language_probability = round(float(info.language_probability), 3)
         except Exception as e:
             print(f"[VAANI] Audio forensics transcription note: {e}")
 
@@ -281,31 +348,42 @@ async def analyze_audio_file(file: UploadFile = File(...)):
     intent_res = intent_analyzer.analyze(
         speech_text,
         mode="attack" if fake_prob >= 0.50 else "legitimate",
+        use_slm=True,
     )
 
-    # Query local Llama 3.2 via Ollama if available
-    if uploaded_transcript and len(uploaded_transcript) >= 6:
+    # Query local Llama 3.2 via Ollama if available for deep contextual intent evaluation
+    if uploaded_transcript and len(uploaded_transcript) >= 5:
         try:
             if intent_analyzer.slm_client and intent_analyzer.slm_client.check_health().get("available"):
                 slm_eval = intent_analyzer.slm_client.evaluate(uploaded_transcript)
                 if slm_eval:
-                    intent_res["intent_risk"] = round(float(slm_eval.get("intent_risk", intent_res["intent_risk"])), 3)
-                    intent_res["risk_level"] = slm_eval.get("risk_level", intent_res["risk_level"])
+                    if "intent_risk" in slm_eval and isinstance(slm_eval["intent_risk"], (int, float)):
+                        intent_res["intent_risk"] = round(float(slm_eval["intent_risk"]), 3)
+                    if slm_eval.get("risk_level"):
+                        intent_res["risk_level"] = slm_eval.get("risk_level")
                     if slm_eval.get("threats"):
-                        intent_res["threats"] = list(set(intent_res["threats"] + slm_eval.get("threats", [])))
+                        intent_res["threats"] = list(set(intent_res.get("threats", []) + slm_eval.get("threats", [])))
                     if slm_eval.get("explanation"):
                         intent_res["slm_reasoning"] = slm_eval.get("explanation")
                     intent_res["slm_status"] = f"active ({intent_analyzer.slm_client.model})"
         except Exception as e:
             print(f"[VAANI] Forensics Llama 3.2 evaluation note: {e}")
 
-    # Phase 7: Multi-Signal Risk Fusion for Forensics
+    # Multi-Signal Risk Fusion for Forensics
     forensics_fusion = risk_engine.calculate(
         acoustic_fake=fake_prob,
         speaker_match=speaker_match,
         intent_score=intent_res["intent_risk"],
         is_speech=True,
     )
+    fused_threat = forensics_fusion["risk"]
+    trust_score = round(max(0.0, min(100.0, 100.0 - fused_threat)), 1)
+    if fused_threat >= 70.0:
+        trust_verdict = "CRITICAL UNTRUSTED"
+    elif fused_threat > 30.0:
+        trust_verdict = "SUSPICIOUS CALLER"
+    else:
+        trust_verdict = "VERIFIED TRUSTED"
 
     # Classification verdicts
     is_fake = fake_prob >= 0.50
@@ -325,33 +403,43 @@ async def analyze_audio_file(file: UploadFile = File(...)):
         "is_cfo_match": is_cfo,
         "cfo_identity_match": cfo_match,
         "enrolled_speaker": bio_res["name"],
-        # ── Phase 7: Multi-Signal Risk Fusion ──
-        "composite_risk": forensics_fusion["risk"],
+        # ── Trust Score & Multi-Signal Risk Fusion ──
+        "trust_score": trust_score,
+        "trust_verdict": trust_verdict,
+        "trust_level": trust_verdict,
+        "composite_risk": fused_threat,
         "threat_level": forensics_fusion["level"],
         "fusion": forensics_fusion,
-        # ── Phase 5 & 6: Transcribed Text & Local Llama 3.2 Intent Forensics ──
+        # ── Phase 5 & 6: Transcribed Text & Multilingual Info ──
         "transcript": uploaded_transcript or "(No vocal speech transcribed)",
+        "detected_language": detected_language,
+        "language_probability": language_probability,
         "intent_risk": round(intent_res["intent_risk"], 3),
         "risk_level": intent_res["risk_level"],
         "threats": intent_res["threats"],
         "confidence": intent_res.get("confidence", 0.90),
         "slm_reasoning": intent_res.get("slm_reasoning"),
         "slm_status": intent_res.get("slm_status", "offline"),
+        # ── Waveform & Frequency Spectrum Forensics ──
+        "waveform_data": dsp_res.get("waveform_envelope", []),
+        "spectrum_data": dsp_res.get("spectrum_data", []),
         "features": {
             "f0": dsp_res["f0"],
             "jitter": dsp_res["jitter"],
             "shimmer": dsp_res["shimmer"],
             "phase_discontinuity": dsp_res["phase_discontinuity"],
             "spectral_centroid": dsp_res.get("spectral_centroid", 0.0),
+            "rolloff": dsp_res.get("rolloff", 0.0),
             "rms_db": dsp_res["rms_db"],
             "is_speech": dsp_res["is_speech"],
         },
         "ml_models": {
             "deepfake_detector": "AASIST (Graph Attention Network)",
             "speaker_verifier": "ECAPA-TDNN (192-D Embedding)",
-            "asr_engine": "Faster-Whisper (INT8 CPU)",
+            "asr_engine": f"Faster-Whisper ({detected_language.upper()} INT8 CPU)",
             "intent_agent": f"Meta Llama 3.2 1B ({intent_res.get('slm_status', 'offline')})",
             "inference_ms": ml_result.get("inference_ms", 15.0),
+            "window_scores": ml_result.get("window_scores", []),
         },
     }
 
@@ -548,6 +636,18 @@ async def audio_websocket_endpoint(websocket: WebSocket):
                         },
                     }
 
+                    # Phase 8: Autonomous Intervention Engine
+                    if level == "critical":
+                        intervention_evt = intervention_engine.evaluate(
+                            fusion_result=fusion_res,
+                            acoustic_fake=acoustic_fake,
+                            speaker_match=speaker_match,
+                            intent_score=intent_risk,
+                            session_id=session_id,
+                        )
+                        if intervention_evt:
+                            await websocket.send_json(intervention_evt)
+
                     # If critical risk, record incident
                     if level == "critical" and (not state.incidents or (time.time() - state.incidents[-1]["ts"]) > 5.0):
                         threat_desc = f" [{', '.join(intent_threats)}]" if intent_threats else ""
@@ -633,6 +733,26 @@ async def audio_websocket_endpoint(websocket: WebSocket):
                                 "fusion": fast_fusion,
                             }
                             await websocket.send_json(fast_telemetry)
+
+                            # Phase 8: Autonomous Intervention Evaluation on fast transcript
+                            if fast_fusion["level"] == "critical":
+                                intervention_evt = intervention_engine.evaluate(
+                                    fusion_result=fast_fusion,
+                                    acoustic_fake=0.93 if state.mode == "attack" else 0.04,
+                                    speaker_match=0.22 if state.mode == "attack" else 0.94,
+                                    intent_score=intent_res["intent_risk"],
+                                    session_id=session_id,
+                                )
+                                if intervention_evt:
+                                    await websocket.send_json(intervention_evt)
+                    elif cmd == "trigger_intervention":
+                        # Phase 8: Manually or test trigger intervention scenario
+                        sim_event = intervention_engine.trigger_simulation(session_id=session_id)
+                        await websocket.send_json(sim_event)
+                    elif cmd == "dismiss_intervention":
+                        # Phase 8: Dismiss active intervention
+                        dismiss_res = intervention_engine.dismiss()
+                        await websocket.send_json({"type": "intervention_resolved", "status": "dismissed"})
                     elif cmd == "get_session_summary":
                         full_txt = streaming_transcriber.session_transcript or streaming_transcriber.current_text
                         curr_intent = intent_analyzer.analyze(full_txt or "No speech recorded", mode=state.mode)

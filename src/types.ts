@@ -108,3 +108,34 @@ export type Incident = {
 }
 
 export type DemoStep = 0 | 1 | 2 | 3 | 4
+
+// ── Phase 8: Autonomous Intervention Types ──
+export type InterventionSignal = {
+  aiVoice: number       // e.g. 91
+  identityMatch: number // e.g. 34
+  intentRisk: number    // e.g. 87
+}
+
+export type InterventionAction = {
+  id: string
+  label: string
+  status: 'DISABLED' | 'ENABLED' | 'LOCKED'
+  reason?: string
+}
+
+export type InterventionEvent = {
+  type: 'intervention'
+  status: 'TRIGGERED' | 'ACTIVE' | 'RESOLVED'
+  level: 'CRITICAL' | string
+  title: string
+  threatScore: number   // e.g. 82
+  signals: InterventionSignal
+  warning?: string
+  warningDirective?: string
+  actions?: InterventionAction[]
+  guidance: string
+  verificationProtocols?: string[]
+  incidentId?: string
+  sessionId?: string
+  timestamp: number
+}

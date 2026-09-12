@@ -2,7 +2,7 @@
 
 > **Real-Time Detection & Prevention of Voice Cloning Impersonation Attacks**
 
-V.A.A.N.I. is an active, low-latency call interception engine operating over live WebRTC, SIP, and telephony audio streams. It fuses vocoder forensics, biometric speaker verification, and social-engineering intent analysis to detect and block synthetic voice clones in sub-400ms.
+V.A.A.N.I. is an active, low-latency call interception engine operating over live WebRTC, SIP, and audio upload streams. It fuses vocoder forensics, biometric speaker verification, multilingual speech-to-text, and social-engineering intent analysis to detect synthetic voice clones and warn users in real time.
 
 ---
 
@@ -14,41 +14,59 @@ V.A.A.N.I. is an active, low-latency call interception engine operating over liv
    - Real-time DC-offset removal and soft-limit normalization.
    - Polyphase anti-aliasing resampling to 16 kHz.
    - Multi-feature Voice Activity Detection (energy gating, ZCR, spectral flux, speech band ratio).
-3. **Phase 3 — Deepfake Detection (ML Core)**:
+3. **Phase 3 — Deepfake Detection (AASIST Core)**:
    - **Model**: **AASIST** (*Audio Anti-Spoofing using Integrated Spectro-Temporal Graph Attention Networks*, ICASSP 2022).
    - Raw waveform SincNet frontend + Spectro-Temporal Graph Attention (297k parameters, ~1.2 MB).
-   - Real-time CPU inference returning `acoustic_fake_probability` on each speech window.
-4. **Phase 4 — Speaker Identity & Prerecorded Audio Forensics**:
+   - Multi-window sliding inspection across full audio length. Corrected logit probability mapping (`probs[0]` = Fake, `probs[1]` = Bonafide).
+4. **Phase 4 — Speaker Identity & Audio Forensics**:
    - **Model**: **ECAPA-TDNN** (*Emphasized Channel Attention, Propagation and Aggregation in TDNN*, Interspeech 2020).
    - 80-channel Mel filterbanks + dilated SE-Res2Net blocks + Attentive Statistics Pooling producing **192-D speaker embeddings**.
-   - `POST /enroll` & `POST /api/enroll`: 10–15s enrollment to vault executive voiceprint.
-   - Dual-signal live fusion: Fake Voice Detector (`0.91`) + Speaker Verification (`0.34`).
-   - Sidebar **"Audio Forensics"** feature (`/analyze` & `POST /api/analyze-audio`): upload `.wav`/`.mp3` audio files for instant deepfake detection and CFO identity match reports.
-5. **Phase 5 — Speech-to-Text (Streaming Whisper)**:
-   - **Model**: **Faster-Whisper** (`tiny.en`, CTranslate2 INT8 on CPU).
+   - `POST /enroll` & `POST /api/enroll`: 10–15s enrollment to vault executive voiceprints.
+   - **Audio Forensics Page (`/analyze`)**: Upload `.wav`/`.mp3` files for offline deepfake inspection, 128-point waveform envelope scrubbing, 64-band FFT spectrum visualizer, Hindi & English speech transcription, intent risk score, and composite **Trust Score**.
+5. **Phase 5 — High-Accuracy Multilingual Speech-to-Text**:
+   - **Model**: **Faster-Whisper** (`large-v3-turbo`, 800 MB INT8 model on CPU) with fallback to `small` / `base` / `tiny`.
+   - **Languages**: Fast & high-accuracy Hindi and English speech recognition.
    - Non-blocking streaming transcription via `asyncio.to_thread` worker thread pool.
-   - VAD-gated speech accumulator buffer emitting real-time partial transcripts without blocking the 250ms audio forensic stride.
-   - Emits streaming partial payload: `{"text": "You need to approve this transfer immediately...", "transcript": "..."}`.
-6. **Phase 6 — AI-Powered Intent & Social-Engineering Analysis Agent**:
-   - **Middleman AI Agent** (`backend/intent_analyzer.py`): Real-time analysis of the rolling Whisper transcript to intercept social-engineering manipulation.
-   - **6-Vector Threat Detection**:
-     1. Authority/identity impersonation (CFO, CEO, Board, Legal)
-     2. Urgency and pressure tactics (Immediately, penalty fees, emergency)
-     3. Requests for sensitive information (OTP, credentials, MFA)
-     4. Attempts to bypass verification (Bypass dual-authorization, off the record)
-     5. Financial or credential manipulation (Wire transfers, offshore escrow)
-     6. Inconsistencies in conversation (Channel deviation, abnormal pretexts)
-   - Real-time sub-millisecond CPU evaluation (< 5ms) + pluggable local SLM hook (Llama 3.2 1B/3B via Ollama / llama.cpp).
-   - Structured Output Schema:
-     ```json
-     {
-       "intent_risk": 0.87,
-       "risk_level": "HIGH",
-       "threats": ["authority_impersonation", "urgency_manipulation", "verification_bypass"],
-       "confidence": 0.91
-     }
-     ```
-   - Live threat badges and automated risk fusion integration into telemetry and incident logs.
+   - VAD-gated speech accumulator emitting real-time partial transcripts without blocking the 250ms audio forensic stride.
+6. **Phase 6 — AI-Powered Intent & Threat Analysis Agent**:
+   - **Middleman AI Agent** (`backend/intent_analyzer.py`): Analyzes transcripts to intercept social-engineering manipulation (Authority impersonation, urgency tactics, credential theft, process bypass).
+   - Real-time sub-millisecond evaluation (< 5ms) + local LLM integration (Ollama / Llama 3.2).
+7. **Phase 8 — Critical Impersonation Warning System**:
+   - Real-time WebSocket event emitting `CRITICAL` alert state when Trust Score drops below threshold.
+   - High-visibility intervention popup warning the user to verify caller identity through out-of-band channels (strictly alert warning, zero financial transaction controls).
+
+---
+
+## 🔒 Sandboxed Workspace Structure
+
+All dependencies, virtual environments, model weights, and Hugging Face model caches are stored **100% inside the `Vaani/` repository folder**:
+
+```
+Vaani/
+├── backend_venv/             # Isolated Python virtual environment
+├── backend/
+│   ├── deps/                 # Local PyTorch, Faster-Whisper & backend dependencies
+│   ├── models/
+│   │   ├── weights/          # AASIST weights (AASIST.pth)
+│   │   └── cache/            # Hugging Face local cache (large-v3-turbo Whisper weights)
+│   ├── audio_buffer.py       # Ring buffer & audio normalizer
+│   ├── deepfake_detector.py  # AASIST PyTorch deepfake detector
+│   ├── dsp.py                # Spectral analysis, F0 pitch, jitter, shimmer
+│   ├── intent_analyzer.py    # Intent threat analyzer
+│   ├── main.py               # FastAPI server (/ws/audio, /api/analyze-audio)
+│   ├── transcriber.py        # Faster-Whisper engine (large-v3-turbo)
+│   └── voiceprint.py         # ECAPA-TDNN 192-d speaker verifier
+├── scripts/
+│   ├── download_model.py     # Faster-Whisper model downloader
+│   └── start_backend.sh      # Automated backend launcher
+├── src/                      # Vite + React 19 Frontend
+├── tests/                    # Backend unit test suite (26 passing tests)
+├── package.json              # Project scripts
+├── vite.config.ts            # Vite dev proxy configuration
+└── .gitignore                # Git exclusions (ignores backend_venv, cache, node_modules)
+```
+
+> **Note**: Only the local Ollama LLM service runs outside as an external daemon (port 11434).
 
 ---
 
@@ -61,118 +79,50 @@ V.A.A.N.I. is an active, low-latency call interception engine operating over liv
 
 ---
 
-## 🚀 Installation & Setup
+## 🚀 Setup & Execution (Zero Activation Required)
 
-### 1. Clone the Repository
-```bash
-git clone https://github.com/nitin24x7/V.A.A.N.I..git
-cd V.A.A.N.I.
-```
+You do **not** need to run `source backend_venv/bin/activate`. Everything is pre-configured to execute directly from `./backend_venv/bin/python3`.
 
-### 2. Frontend Setup
-Install frontend dependencies:
+### 1. Install Frontend Dependencies
 ```bash
 npm install
 ```
 
-### 3. Backend Setup
-
-#### Create & Activate Python Virtual Environment
+### 2. (Optional) Download / Verify 800MB Whisper Model
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate   # On Windows: .venv\Scripts\activate
+npm run download-model
 ```
+*Downloads or verifies `mobiuslabsgmbh/faster-whisper-large-v3-turbo` directly into `backend/models/cache/`.*
 
-#### Install Python Dependencies
-For CPU-only PyTorch (lightweight, ~200MB download):
-```bash
-pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
-pip install -r backend/requirements.txt
-```
-
-*(Optional) If using CUDA/GPU:*
-```bash
-pip install -r backend/requirements.txt
-```
-
-### 4. Pretrained Model Weights
-
-The pretrained AASIST model weights (`AASIST.pth`, 1.2 MB) will **automatically download** on your first run.
-
-If you prefer to download them manually:
-```bash
-mkdir -p backend/models/weights
-curl -L -o backend/models/weights/AASIST.pth "https://github.com/clovaai/aasist/raw/main/models/weights/AASIST.pth"
-```
-
----
-
-## 🏃 Running the Application
+### 3. Run the Application
 
 Open **two terminal windows**:
 
-### Terminal 1: Start Backend (FastAPI Engine)
+#### Terminal 1: Start Backend (FastAPI Engine)
 ```bash
 npm run backend
 ```
-*Or directly via Python:*
-```bash
-python3 -m uvicorn main:app --host 0.0.0.0 --port 8000 --app-dir backend --reload
-```
-Backend runs at: `http://localhost:8000`
+*Backend starts on `http://localhost:8000` with local models pre-loaded.*
 
-### Terminal 2: Start Frontend (Vite + React)
+#### Terminal 2: Start Frontend (Vite + React)
 ```bash
 npm run dev
 ```
-Frontend runs at: `http://localhost:5173`
+*Frontend starts on `http://localhost:5173`.*
 
 ---
 
-## 🧪 Testing the Live System
+## 🧪 Testing
 
-1. Open **`http://localhost:5173`** in your browser.
-2. Click **Start Microphone Ingestion** (or **Start Call**).
-3. Allow microphone permission when prompted.
-4. **Natural Speech Test**: Speak normally.
-   - Waveform animates in real time.
-   - **AI Voice Detection** remains low (`< 10%`).
-   - Badge displays `Natural speech verified`.
-5. **Attack Simulation Test**: Click **Inject clone** / **Attack mode**.
-   - Model flags synthetic voice indicators (`> 90%`).
-   - Warning badge **`SYNTHETIC VOICE DETECTED`** triggers.
-   - High-risk threat event is logged to the Incident log.
-
----
-
-## 🛠️ Project Structure
-
+### Automated Backend Tests
+Run the backend test suite (26 tests covering AASIST, ECAPA-TDNN, Whisper, Intent, DSP, and API endpoints):
+```bash
+PYTHONPATH=backend/deps:backend ./backend_venv/bin/python3 -m unittest discover tests
 ```
-Vaani/
-├── backend/
-│   ├── audio_buffer.py       # 1.0s circular ring buffer with 250ms stride & normalizer
-│   ├── deepfake_detector.py  # AASIST PyTorch deepfake detection wrapper
-│   ├── dsp.py                # VAD, F0 pitch tracking, jitter, shimmer, spectral flux
-│   ├── intent_analyzer.py    # AI-powered intent & social engineering agent (<5ms CPU)
-│   ├── main.py               # FastAPI REST & WebSocket server (/ws/audio, /enroll, /api/analyze-intent)
-│   ├── requirements.txt      # Python dependencies
-│   ├── transcriber.py        # Faster-Whisper streaming partial speech-to-text engine
-│   ├── voiceprint.py         # ECAPA-TDNN 192-d speaker verifier & profile vault
-│   └── models/
-│       ├── AASIST.py         # AASIST deepfake model architecture
-│       ├── ECAPA_TDNN.py     # ECAPA-TDNN 192-D speaker embedding model
-│       └── weights/          # Checkpoint directory (AASIST.pth)
-├── src/
-│   ├── components/           # UI components (Waveform, GlassCard, AppShell, etc.)
-│   ├── context/              # React SessionContext (WebSocket streaming & state)
-│   ├── lib/                  # Audio ingestion service (ScriptProcessorNode Int16)
-│   ├── pages/                # Dashboard, Audio Forensics, Enrollment, Call, Sources, SIEM pages
-│   └── types.ts              # TypeScript contracts for telemetry & incidents
-├── tests/
-│   └── test_phase6_intent.py # Automated test suite for AI intent analysis
-├── public/                   # Static assets & brand logo
-├── package.json              # Node scripts & dependencies
-└── vite.config.ts            # Vite config with /api and /ws backend proxy
+
+### Frontend Build Test
+```bash
+npm run build
 ```
 
 ---

@@ -24,34 +24,77 @@ deps_dir = os.path.join(os.path.dirname(__file__), "deps")
 if os.path.exists(deps_dir) and deps_dir not in sys.path:
     sys.path.insert(0, deps_dir)
 
+# Ensure all Hugging Face models are loaded strictly from inside Vaani/backend/models/cache
+local_cache_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "models", "cache"))
+os.environ.setdefault("HF_HOME", local_cache_dir)
+os.environ.setdefault("HUGGINGFACE_HUB_CACHE", os.path.join(local_cache_dir, "hub"))
+
 # Global faster-whisper model instance
 _whisper_model = None
 _model_load_attempted = False
 
 
 def get_whisper_model():
-    """Lazily load faster-whisper model on CPU (INT8)."""
+    """
+    Lazily load faster-whisper model on CPU (INT8).
+    Checks models in priority order:
+      1. WHISPER_MODEL env var (e.g. 'small', 'base', 'large-v3-turbo')
+      2. 'small' (optimal balance for Hindi + English on CPU)
+      3. 'base' (lightweight multilingual)
+      4. 'tiny' (minimal fallback)
+      5. 'tiny.en' (English fallback)
+    """
     global _whisper_model, _model_load_attempted
     if _whisper_model is not None:
         return _whisper_model
 
+    preferred = os.getenv("WHISPER_MODEL", "large-v3-turbo")
+    candidates = [preferred, "large-v3-turbo", "small", "base", "tiny", "tiny.en"]
+    seen = set()
+    model_queue = [c for c in candidates if not (c in seen or seen.add(c))]
+
     try:
         from faster_whisper import WhisperModel
-        print("[VAANI] Loading Faster-Whisper (tiny.en, INT8 CPU)...")
+    except ImportError as ie:
+        print(f"[VAANI] Note: faster_whisper not installed ({ie}).")
+        return None
+
+    # Phase 1: Try cached local models first (prevents hanging HTTP requests with huge downloads)
+    for model_name in model_queue:
+        try:
+            _whisper_model = WhisperModel(
+                model_name,
+                device="cpu",
+                compute_type="int8",
+                cpu_threads=8,
+                num_workers=1,
+                local_files_only=True,
+            )
+            _model_load_attempted = True
+            print(f"[VAANI] ✅ Faster-Whisper ({model_name}) loaded from local cache (8 CPU threads)")
+            return _whisper_model
+        except Exception:
+            pass
+
+    # Phase 2: If no local model loaded, try minimal network download for tiny only
+    try:
+        print("[VAANI] No cached models found. Attempting minimal fallback Faster-Whisper (tiny)...")
         _whisper_model = WhisperModel(
-            "tiny.en",
+            "tiny",
             device="cpu",
             compute_type="int8",
             cpu_threads=8,
             num_workers=1,
         )
         _model_load_attempted = True
-        print("[VAANI] ✅ Faster-Whisper tiny.en loaded successfully for real-time STT (8 CPU threads)")
+        print("[VAANI] ✅ Faster-Whisper (tiny) loaded successfully")
+        return _whisper_model
     except Exception as e:
-        print(f"[VAANI] Note: Faster-Whisper not active ({e}). Using streaming contextual transcriber.")
-        _whisper_model = None
+        print(f"[VAANI] ⚠ Fallback failed: {e}")
 
-    return _whisper_model
+    print("[VAANI] ⚠ All Faster-Whisper candidates unavailable. Using contextual transcriber.")
+    _whisper_model = None
+    return None
 
 
 class StreamingTranscriber:
@@ -132,7 +175,7 @@ class StreamingTranscriber:
                 audio,
                 beam_size=1,
                 best_of=1,
-                language="en",
+                language=None,  # Auto-detect language (Hindi, English, etc.)
                 temperature=0.0,
                 condition_on_previous_text=False,
                 vad_filter=False,  # DSP already performs multi-band VAD

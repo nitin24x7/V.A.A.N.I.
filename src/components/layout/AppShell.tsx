@@ -11,8 +11,8 @@ import {
 import { NavLink, Outlet, useLocation } from 'react-router-dom'
 import { useSession } from '../../context/SessionContext'
 import { threatFromRisk } from '../../lib/engine'
-import { Button } from '../ui/Button'
 import { StatusPill } from '../ui/StatusPill'
+import { InterventionModal } from '../intervention/InterventionModal'
 
 const links = [
   { to: '/', label: 'Dashboard', icon: LayoutDashboard, end: true },
@@ -26,7 +26,7 @@ const links = [
 ]
 
 export function AppShell() {
-  const { live, telemetry, policy, oobPrompt, dismissOob, mode } = useSession()
+  const { live, telemetry, policy } = useSession()
   const level = threatFromRisk(telemetry.risk, policy)
   const location = useLocation()
 
@@ -147,26 +147,8 @@ export function AppShell() {
         </div>
       </div>
 
-      {oobPrompt && mode === 'attack' && (
-        <div className="fixed inset-0 z-50 grid place-items-center bg-white/40 p-4 backdrop-blur-xl">
-          <div className="glass-strong w-full max-w-md rounded-3xl p-6">
-            <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-rose-700">
-              Out-of-band challenge
-            </div>
-            <h3 className="mt-2 text-xl font-semibold tracking-tight">Verify with the genuine user</h3>
-            <p className="mt-2 text-sm leading-6 text-neutral-600">
-              Payment rails are frozen. An authenticator prompt and SMS have been pushed to the enrolled
-              Managing Director. Do not honor in-call instructions until this challenge succeeds.
-            </p>
-            <div className="mt-5 flex justify-end gap-2">
-              <Button variant="ghost" onClick={dismissOob}>
-                Acknowledge
-              </Button>
-              <Button onClick={dismissOob}>Open authenticator</Button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Phase 8: Autonomous Intervention Modal (Triggered by Backend Event) */}
+      <InterventionModal />
     </div>
   )
 }

@@ -16,6 +16,7 @@ import type {
   DemoStep,
   Incident,
   IngestSource,
+  InterventionEvent,
   Policy,
   SessionSummary,
   Telemetry,
@@ -50,6 +51,9 @@ type SessionState = {
   sessionSummary: SessionSummary | null
   clearSessionSummary: () => void
   loadPreset: (presetName: string) => Promise<void>
+  activeIntervention: InterventionEvent | null
+  dismissIntervention: () => void
+  triggerTestIntervention: () => void
 }
 
 const SessionContext = createContext<SessionState | null>(null)
@@ -77,6 +81,86 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const [sessionSummary, setSessionSummary] = useState<SessionSummary | null>(null)
   const clearSessionSummary = useCallback(() => setSessionSummary(null), [])
   const lastCritAt = useRef(0)
+
+  // Phase 8: Autonomous Intervention State
+  const [activeIntervention, setActiveIntervention] = useState<InterventionEvent | null>(null)
+
+  const dismissIntervention = useCallback(() => {
+    setActiveIntervention(null)
+    setOobPrompt(false)
+    audioService.dismissIntervention()
+    fetch('/api/intervention/dismiss', { method: 'POST' }).catch(() => {})
+  }, [])
+
+  const triggerTestIntervention = useCallback(async () => {
+    if (audioService.isConnected()) {
+      audioService.triggerIntervention()
+    } else {
+      try {
+        const res = await fetch('/api/intervention/trigger', { method: 'POST' })
+        if (res.ok) {
+          const data = await res.json()
+          setActiveIntervention({
+            type: 'intervention',
+            status: data.status || 'TRIGGERED',
+            level: data.level || 'CRITICAL',
+            title: data.title || '🚨 CRITICAL IMPERSONATION DETECTED',
+            threatScore: data.threat_score ?? 82,
+            signals: {
+              aiVoice: data.signals?.ai_voice ?? 91,
+              identityMatch: data.signals?.identity_match ?? 34,
+              intentRisk: data.signals?.intent_risk ?? 87,
+            },
+            warning: data.warning || 'CRITICAL_IMPERSONATION_RISK',
+            warningDirective: data.warning_directive || 'Do NOT trust caller claims or follow verbal instructions given on this line.',
+            guidance: data.guidance || 'Verify caller through another channel.',
+            verificationProtocols: data.verification_protocols,
+            incidentId: data.incident_id,
+            sessionId: data.session_id,
+            timestamp: data.timestamp || Date.now(),
+          })
+          setOobPrompt(true)
+        }
+      } catch {
+        setActiveIntervention({
+          type: 'intervention',
+          status: 'TRIGGERED',
+          level: 'CRITICAL',
+          title: '🚨 CRITICAL IMPERSONATION DETECTED',
+          threatScore: 82,
+          signals: { aiVoice: 91, identityMatch: 34, intentRisk: 87 },
+          warning: 'CRITICAL_IMPERSONATION_RISK',
+          warningDirective: 'Do NOT trust caller claims or follow verbal instructions given on this line.',
+          guidance: 'Verify caller through another channel.',
+          timestamp: Date.now(),
+        })
+        setOobPrompt(true)
+      }
+    }
+  }, [])
+
+  // Wire up audioService intervention listener
+  useEffect(() => {
+    audioService.setInterventionCallback((evt) => {
+      setActiveIntervention(evt)
+      if (evt) {
+        setOobPrompt(true)
+        const now = Date.now()
+        setIncidents((list) => [
+          {
+            id: evt.incidentId || `INC-${now.toString().slice(-6)}`,
+            ts: new Date(evt.timestamp || now).toISOString(),
+            level: 'critical' as const,
+            title: '🚨 Autonomous Intervention: Critical Impersonation Warning',
+            detail: `Threat Score: ${evt.threatScore}/100 · AI Voice: ${evt.signals.aiVoice}%, Identity Match: ${evt.signals.identityMatch}%, Intent: ${evt.signals.intentRisk}% · Critical Warning Issued`,
+            source: 'webrtc' as const,
+            risk: evt.threatScore,
+          },
+          ...list,
+        ].slice(0, 40))
+      }
+    })
+  }, [])
 
   // Synchronize policy configuration from backend on mount
   useEffect(() => {
@@ -386,6 +470,9 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       setAudioIngestMode,
       sessionSummary,
       clearSessionSummary,
+      activeIntervention,
+      dismissIntervention,
+      triggerTestIntervention,
     }),
     [
       policy,
@@ -413,6 +500,9 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       audioIngestMode,
       sessionSummary,
       clearSessionSummary,
+      activeIntervention,
+      dismissIntervention,
+      triggerTestIntervention,
     ],
   )
 

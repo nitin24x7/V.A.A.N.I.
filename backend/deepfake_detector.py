@@ -192,9 +192,9 @@ class DeepfakeDetector:
         # Softmax to get probabilities
         probs = F.softmax(logits, dim=-1)[0]
 
-        # AASIST convention: index 0 = bonafide, index 1 = spoof
-        fake_prob = float(probs[1].item())
-        bonafide_prob = float(probs[0].item())
+        # AASIST output shape: (1, 2) → index 0 = spoof (fake), index 1 = bonafide (genuine)
+        fake_prob = float(probs[0].item())
+        bonafide_prob = float(probs[1].item())
         confidence = max(fake_prob, bonafide_prob)
 
         inference_ms = round((time.perf_counter() - start) * 1000, 1)
@@ -202,6 +202,60 @@ class DeepfakeDetector:
         return {
             "acoustic_fake_probability": round(fake_prob, 4),
             "confidence": round(confidence, 4),
+            "model_type": "aasist",
+            "inference_ms": inference_ms,
+            "pretrained": self._is_loaded,
+        }
+
+    @torch.no_grad()
+    def predict_full_audio(self, audio: np.ndarray, sample_rate: int = 16000) -> dict:
+        """
+        Evaluate deepfake probability across an entire audio file using multi-window analysis.
+        For audio <= 64600 samples (~4.04s), runs a single padded/tiled inference pass.
+        For longer audio, slides 64600-sample windows (with 32000-sample / 2.0s hop) to inspect
+        every section and catch spliced or continuous synthetic voice artifacts.
+        """
+        start = time.perf_counter()
+        if len(audio) < 1600:
+            audio = np.pad(audio, (0, 1600 - len(audio)))
+
+        if len(audio) <= self.nb_samp:
+            res = self.predict(audio, sample_rate)
+            res["window_scores"] = [res["acoustic_fake_probability"]]
+            return res
+
+        hop_samp = 32000  # 2.0s stride
+        window_scores = []
+        n_windows = int(np.ceil((len(audio) - self.nb_samp) / hop_samp)) + 1
+
+        for i in range(n_windows):
+            s_idx = i * hop_samp
+            e_idx = s_idx + self.nb_samp
+            if e_idx > len(audio):
+                win = audio[-self.nb_samp:]
+            else:
+                win = audio[s_idx:e_idx]
+
+            padded = self._pad_to_length(win.astype(np.float32))
+            x = torch.from_numpy(padded).unsqueeze(0).float().to(self.device)
+            _, logits = self.model(x)
+            probs = F.softmax(logits, dim=-1)[0]
+            # Index 0 is spoof/synthetic
+            w_fake = float(probs[0].item())
+            window_scores.append(round(w_fake, 4))
+
+        peak_fake = max(window_scores)
+        mean_fake = sum(window_scores) / len(window_scores)
+        # Spliced or partial synthetic voice is flagged via peak detection
+        overall_fake = round(max(peak_fake, 0.75 * peak_fake + 0.25 * mean_fake), 4)
+        inference_ms = round((time.perf_counter() - start) * 1000, 1)
+
+        return {
+            "acoustic_fake_probability": overall_fake,
+            "peak_fake_probability": round(peak_fake, 4),
+            "mean_fake_probability": round(mean_fake, 4),
+            "window_scores": window_scores,
+            "confidence": round(max(overall_fake, 1.0 - overall_fake), 4),
             "model_type": "aasist",
             "inference_ms": inference_ms,
             "pretrained": self._is_loaded,
