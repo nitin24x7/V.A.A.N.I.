@@ -314,3 +314,115 @@ def analyze_audio_window(
         "acoustic_fake_prob": round(synthetic_prob, 3),
         "vad": vad_features,
     }
+
+
+def analyze_full_audio(audio: np.ndarray, sample_rate: int = 16000) -> dict:
+    """
+    Comprehensive DSP forensics over an entire prerecorded audio file:
+      - Voiced segment extraction and multi-frame averaging for F0, jitter, shimmer,
+        spectral centroid, rolloff, and phase discontinuity.
+      - 128-point normalized waveform envelope for interactive UI waveform rendering.
+      - 64-band FFT frequency spectrum (50 Hz to 8000 Hz) for frequency visualizer.
+    """
+    if len(audio) < 1600:
+        audio = np.pad(audio, (0, 1600 - len(audio)))
+
+    if audio.ndim > 1:
+        audio = audio.flatten()
+    audio = audio.astype(np.float32)
+
+    # 1. 128-point normalized waveform envelope
+    n_points = 128
+    bucket_size = max(1, len(audio) // n_points)
+    envelope = []
+    for i in range(n_points):
+        chunk = audio[i * bucket_size : (i + 1) * bucket_size]
+        if len(chunk) > 0:
+            envelope.append(float(np.max(np.abs(chunk))))
+        else:
+            envelope.append(0.0)
+    max_env = max(envelope) or 1.0
+    waveform_envelope = [round(float(v / max_env), 3) for v in envelope]
+
+    # 2. 64-band FFT frequency spectrum
+    try:
+        windowed = audio * np.hanning(len(audio))
+        fft_mag = np.abs(np.fft.rfft(windowed))
+        fft_freqs = np.fft.rfftfreq(len(audio), 1.0 / sample_rate)
+        bins = np.linspace(50, 8000, 65)
+        spectrum_bins = []
+        for i in range(64):
+            mask = (fft_freqs >= bins[i]) & (fft_freqs < bins[i + 1])
+            val = float(np.mean(fft_mag[mask])) if np.any(mask) else 0.0
+            spectrum_bins.append(val)
+        max_bin = max(spectrum_bins) or 1.0
+        spectrum_data = [round(float(v / max_bin * 100.0), 1) for v in spectrum_bins]
+    except Exception:
+        spectrum_data = [20.0] * 64
+
+    # 3. Multi-frame voiced acoustic feature analysis
+    win_len = sample_rate  # 1.0s window
+    hop_len = sample_rate // 2  # 0.5s hop
+    n_hops = max(1, (len(audio) - win_len) // hop_len + 1)
+
+    f0_list = []
+    jitter_list = []
+    shimmer_list = []
+    centroid_list = []
+    rolloff_list = []
+    phase_list = []
+    rms_list = []
+
+    for i in range(n_hops):
+        s_idx = i * hop_len
+        w = audio[s_idx : s_idx + win_len]
+        if len(w) < win_len:
+            w = np.pad(w, (0, win_len - len(w)))
+
+        is_speech, vad_f = detect_voice_activity(w, sample_rate=sample_rate)
+        if is_speech:
+            f0, jit, shim = estimate_pitch_and_tremor(w, sample_rate=sample_rate)
+            spec = compute_spectral_features(w, sample_rate=sample_rate)
+            if f0 > 0:
+                f0_list.append(f0)
+            jitter_list.append(jit)
+            shimmer_list.append(shim)
+            centroid_list.append(spec["spectral_centroid"])
+            rolloff_list.append(spec["rolloff"])
+            phase_list.append(spec["phase_discontinuity"])
+            rms_list.append(vad_f["rms_db"])
+
+    # Fallback to single-window if no speech frames passed strict VAD
+    if not centroid_list:
+        sample_w = audio[:sample_rate] if len(audio) >= sample_rate else np.pad(audio, (0, sample_rate - len(audio)))
+        single_res = analyze_audio_window(sample_w, sample_rate=sample_rate)
+        avg_f0 = single_res.get("f0", 0.0)
+        avg_jitter = single_res.get("jitter", 0.015)
+        avg_shimmer = single_res.get("shimmer", 0.03)
+        avg_centroid = single_res.get("spectral_centroid", 1200.0)
+        avg_rolloff = single_res.get("rolloff", 3000.0)
+        avg_phase = single_res.get("phase_discontinuity", 0.15)
+        avg_rms = single_res.get("rms_db", -30.0)
+        has_speech = single_res.get("is_speech", False)
+    else:
+        avg_f0 = float(np.median(f0_list)) if f0_list else 0.0
+        avg_jitter = float(np.mean(jitter_list))
+        avg_shimmer = float(np.mean(shimmer_list))
+        avg_centroid = float(np.mean(centroid_list))
+        avg_rolloff = float(np.mean(rolloff_list))
+        avg_phase = float(np.mean(phase_list))
+        avg_rms = float(np.mean(rms_list))
+        has_speech = True
+
+    return {
+        "is_speech": has_speech,
+        "rms_db": round(avg_rms, 1),
+        "f0": round(avg_f0, 1),
+        "jitter": round(avg_jitter, 4),
+        "shimmer": round(avg_shimmer, 4),
+        "spectral_centroid": round(avg_centroid, 1),
+        "rolloff": round(avg_rolloff, 1),
+        "phase_discontinuity": round(avg_phase, 3),
+        "waveform_envelope": waveform_envelope,
+        "spectrum_data": spectrum_data,
+    }

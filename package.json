@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "backend": "PYTHONPATH=backend/deps:backend ./backend_venv/bin/python3 -m uvicorn main:app --host 0.0.0.0 --port 8000 --app-dir backend --reload",
+    "backend": "HF_HOME=backend/models/cache PYTHONPATH=backend/deps:backend ./backend_venv/bin/python3 -m uvicorn main:app --host 0.0.0.0 --port 8000 --app-dir backend --reload",
+    "download-model": "HF_HOME=backend/models/cache PYTHONPATH=backend/deps:backend ./backend_venv/bin/python3 scripts/download_model.py",
     "build": "tsc -b && vite build",
     "lint": "oxlint",
     "preview": "vite preview"

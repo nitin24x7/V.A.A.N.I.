@@ -1,7 +1,8 @@
-import type { AudioIngestMode, Policy, SessionSummary, Telemetry } from '../types'
+import type { AudioIngestMode, InterventionEvent, Policy, SessionSummary, Telemetry } from '../types'
 
 export type AudioTelemetryCallback = (telemetry: Partial<Telemetry> & { rawData?: any }) => void
 export type WaveformCallback = (data: Float32Array, rmsDb: number) => void
+export type InterventionCallback = (event: InterventionEvent | null) => void
 
 class AudioIngestionService {
   private audioContext: AudioContext | null = null
@@ -17,6 +18,7 @@ class AudioIngestionService {
   private onTelemetryCallback: AudioTelemetryCallback | null = null
   private onWaveformCallback: WaveformCallback | null = null
   private onSessionSummaryCallback: ((summary: SessionSummary) => void) | null = null
+  private onInterventionCallback: InterventionCallback | null = null
   private animFrameId: number | null = null
   private recordingBuffer: number[] = []
   private isRecordingForEnroll: boolean = false
@@ -260,6 +262,28 @@ function downsampleTo16k(input: Float32Array, inputSampleRate: number): Float32A
               latencyMs: data.latencyMs,
               rawData: data,
             })
+          } else if (data.type === 'intervention' && this.onInterventionCallback) {
+            this.onInterventionCallback({
+              type: 'intervention',
+              status: data.status || 'TRIGGERED',
+              level: data.level || 'CRITICAL',
+              title: data.title || '🚨 CRITICAL IMPERSONATION DETECTED',
+              threatScore: data.threat_score ?? 82,
+              signals: {
+                aiVoice: data.signals?.ai_voice ?? 91,
+                identityMatch: data.signals?.identity_match ?? 34,
+                intentRisk: data.signals?.intent_risk ?? 87,
+              },
+              warning: data.warning || 'CRITICAL_IMPERSONATION_RISK',
+              warningDirective: data.warning_directive || 'Do NOT trust caller claims or follow verbal instructions given on this line.',
+              guidance: data.guidance || 'Verify caller through another channel.',
+              verificationProtocols: data.verification_protocols,
+              incidentId: data.incident_id,
+              sessionId: data.session_id,
+              timestamp: data.timestamp || Date.now(),
+            })
+          } else if (data.type === 'intervention_resolved' && this.onInterventionCallback) {
+            this.onInterventionCallback(null)
           } else if (data.type === 'session_summary' && this.onSessionSummaryCallback) {
             this.onSessionSummaryCallback({
               durationSec: data.durationSec || 0,
@@ -323,6 +347,22 @@ function downsampleTo16k(input: Float32Array, inputSampleRate: number): Float32A
         command: 'load_preset',
         preset: presetName,
       }))
+    }
+  }
+
+  public setInterventionCallback(cb: InterventionCallback | null) {
+    this.onInterventionCallback = cb
+  }
+
+  public triggerIntervention() {
+    if (this.socket && this.socket.readyState === WebSocket.OPEN) {
+      this.socket.send(JSON.stringify({ command: 'trigger_intervention' }))
+    }
+  }
+
+  public dismissIntervention() {
+    if (this.socket && this.socket.readyState === WebSocket.OPEN) {
+      this.socket.send(JSON.stringify({ command: 'dismiss_intervention' }))
     }
   }
 

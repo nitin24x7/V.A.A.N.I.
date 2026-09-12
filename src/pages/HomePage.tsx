@@ -69,6 +69,7 @@ export function HomePage() {
     setAudioIngestMode,
     sessionSummary,
     clearSessionSummary,
+    triggerTestIntervention,
   } = useSession()
 
   const [showWeights, setShowWeights] = useState(false)
@@ -93,12 +94,12 @@ export function HomePage() {
             Enterprise Defense System
           </div>
           <h1 className="mt-4 text-3xl font-semibold tracking-tight md:text-4xl lg:text-5xl">
-            Stop cloned voices before the transfer goes through.
+            Stop cloned voices and synthetic speech attacks in real-time.
           </h1>
           <p className="mt-3 max-w-2xl text-[15px] leading-7 text-neutral-600">
             VAANI is a live interception layer for WebRTC, SIP, and in-app calls. It fuses vocoder
-            forensics, speaker verification, and social-engineering intent — then locks payment
-            workflows in under 400 ms.
+            forensics, speaker verification, and social-engineering intent to warn users and security
+            teams in under 400 ms.
           </p>
         </div>
       </GlassCard>
@@ -193,19 +194,31 @@ export function HomePage() {
                 </div>
               )}
 
-              {live ? (
-                <Button variant="ghost" onClick={stopCall}>
-                  Stop stream
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  variant="ghost"
+                  onClick={triggerTestIntervention}
+                  className="border border-red-500/30 text-red-700 hover:bg-red-50 hover:text-red-800 text-[12px] font-semibold flex items-center gap-1.5 shadow-xs"
+                  title="Trigger Phase 8 Critical Impersonation Intervention test from backend (Risk 82)"
+                >
+                  <span>🚨</span>
+                  <span>Test Intervention (Risk 82)</span>
                 </Button>
-              ) : (
-                <Button onClick={() => startCall('webrtc', audioIngestMode)}>
-                  {audioIngestMode === 'mic'
-                    ? 'Start microphone stream'
-                    : audioIngestMode === 'tab'
-                    ? 'Connect Tab (eg. Gmeet / Slack/zoom)'
-                    : 'Start dual stream'}
-                </Button>
-              )}
+
+                {live ? (
+                  <Button variant="ghost" onClick={stopCall}>
+                    Stop stream
+                  </Button>
+                ) : (
+                  <Button onClick={() => startCall('webrtc', audioIngestMode)}>
+                    {audioIngestMode === 'mic'
+                      ? 'Start microphone stream'
+                      : audioIngestMode === 'tab'
+                      ? 'Connect Tab (eg. Gmeet / Slack/zoom)'
+                      : 'Start dual stream'}
+                  </Button>
+                )}
+              </div>
             </div>
           </div>
           <div className="h-36">
@@ -292,7 +305,7 @@ export function HomePage() {
             </div>
             <div>
               <div className="text-[15px] font-semibold text-neutral-900 flex items-center gap-2">
-                Phase 7 · Multi-Signal Risk Fusion Engine
+                Multi-Signal Risk Fusion Engine
                 <span className="rounded-full bg-blue-500/10 px-2.5 py-0.5 text-[10px] font-semibold text-blue-700">
                   {telemetry.fusion?.formula || `${policy.wAcoustic.toFixed(2)}*Acoustic + ${policy.wBiometric.toFixed(2)}*(1-Bio) + ${policy.wIntent.toFixed(2)}*Intent`}
                 </span>
@@ -585,10 +598,10 @@ export function HomePage() {
             <div className="mt-4 rounded-lg border border-neutral-800 bg-neutral-900/90 p-3 text-xs text-neutral-300">
               <span className="font-semibold text-white">Decision Action:</span>{' '}
               {level === 'critical'
-                ? 'CRITICAL RISK: Automatic transfer freeze engaged. Dual-authorization required.'
+                ? 'CRITICAL RISK: High-threat impersonation detected. Do not trust caller instructions.'
                 : level === 'medium'
                 ? 'MEDIUM RISK: In-band visual advisory active. Verification recommended.'
-                : 'LOW RISK: Routine business dialogue. Green banking workflows cleared.'}
+                : 'LOW RISK: Routine business dialogue. Natural voice characteristics verified.'}
             </div>
           </div>
         </div>
