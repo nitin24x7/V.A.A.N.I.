@@ -5,6 +5,7 @@ import {
   LayoutDashboard,
   PhoneCall,
   Radio,
+  Shield,
   SlidersHorizontal,
   UserRound,
 } from 'lucide-react'
@@ -22,6 +23,7 @@ const links = [
   { to: '/incidents', label: 'SIEM Incidents', icon: Activity },
   { to: '/sources', label: 'Ingestion', icon: Radio },
   { to: '/policy', label: 'Policy Engine', icon: SlidersHorizontal },
+  { to: '/telephony', label: 'Telephony Robustness', icon: Shield },
   { to: '/architecture', label: 'Architecture', icon: Cpu },
 ]
 
