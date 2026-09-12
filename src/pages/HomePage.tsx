@@ -23,6 +23,7 @@ import { GlassCard } from '../components/ui/GlassCard'
 import { RiskGauge } from '../components/ui/RiskGauge'
 import { StatusPill } from '../components/ui/StatusPill'
 import { Waveform } from '../components/ui/Waveform'
+import { LatencyWaterfall } from '../components/telemetry/LatencyWaterfall'
 
 function formatDuration(sec: number) {
   const m = Math.floor(sec / 60)
@@ -606,8 +607,11 @@ export function HomePage() {
           </div>
         </div>
       </GlassCard>
+ 
+       {/* Phase 10: Sub-400ms Pipeline Latency Waterfall & SLA */}
+       <LatencyWaterfall />
 
-      {/* Historical Telemetry Chart & Streaming Transcript */}
+       {/* Historical Telemetry Chart & Streaming Transcript */}
       <div className="grid gap-4 lg:grid-cols-[1.4fr_0.8fr]">
         <GlassCard className="p-5">
           <div className="mb-3 text-[11px] uppercase tracking-[0.16em] text-neutral-500">
