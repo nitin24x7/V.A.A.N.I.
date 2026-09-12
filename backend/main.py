@@ -21,6 +21,7 @@ from intent_analyzer import get_intent_analyzer
 from risk_engine import get_risk_engine
 from intervention_engine import get_intervention_engine
 from telephony_simulator import run_robustness_suite
+from latency_tracker import LatencyTracker, benchmark_live_pipeline
 
 app = FastAPI(
     title="VAANI Backend",
@@ -193,6 +194,14 @@ async def telephony_robustness(file: UploadFile = File(...)):
 
     result = run_robustness_suite(audio, sample_rate=sr)
     return result
+
+@app.get("/api/benchmark/latency")
+def get_latency_benchmark():
+    """
+    Phase 10: Benchmark stage-by-stage pipeline latencies on CPU.
+    Evaluates audio -> detection, audio -> identity, audio -> risk, audio -> UI intervention.
+    """
+    return benchmark_live_pipeline()
 
 @app.get("/api/voiceprints")
 def get_voiceprints():
@@ -515,42 +524,50 @@ async def audio_websocket_endpoint(websocket: WebSocket):
 
                 # Process every 250 ms stride (or every 3rd packet as fallback)
                 if stride_ready or packet_count % 3 == 0:
+                    stride_tracker = LatencyTracker(t_arrive=start_time)
                     window = ring_buffer.get_latest_window()
 
                     # Phase 2 DSP: returns timestamp, speech_detected, audio_duration_ms
+                    t_v0 = time.perf_counter()
                     dsp_results = analyze_audio_window(window, sample_rate=16000, mode=state.mode)
+                    stride_tracker.mark_vad((time.perf_counter() - t_v0) * 1000)
 
-                    # ── Phase 3: AASIST Deepfake Detection ──
+                    # ── Phase 3 & 4: Concurrent Inference (AASIST + ECAPA-TDNN) ──
                     ml_result = None
                     if dsp_results["is_speech"]:
-                        ml_result = deepfake_detector.predict(window, sample_rate=16000)
+                        ml_result, bio_res = await asyncio.gather(
+                            asyncio.to_thread(lambda: deepfake_detector.predict(window, sample_rate=16000, fast_mode=True)),
+                            asyncio.to_thread(lambda: voiceprint_manager.verify_detailed(window, sample_rate=16000)),
+                        )
+                        stride_tracker.mark_detection(ml_result["inference_ms"])
+                        stride_tracker.mark_identity(bio_res["inference_ms"])
                         acoustic_fake = ml_result["acoustic_fake_probability"]
-                    else:
-                        acoustic_fake = 0.0  # No speech -> strictly 0.0
-
-                    # ── Phase 4: ECAPA-TDNN Speaker Identity Verification ──
-                    if dsp_results["is_speech"]:
-                        bio_res = voiceprint_manager.verify_detailed(window, sample_rate=16000)
                         speaker_match = bio_res["speaker_match"]
                         cosine_sim = bio_res["cosine_similarity"]
                         if state.mode == "attack":
                             speaker_match = round(min(0.34, max(0.12, speaker_match * 0.35 + np.random.uniform(-0.02, 0.03))), 3)
                         bio_match = speaker_match
                     else:
-                        bio_res = {"name": voiceprint_manager.enrolled_name or "Target Profile", "role": "CFO", "speaker_match": 0.0, "cosine_similarity": 0.0}
+                        stride_tracker.mark_detection(0.0)
+                        stride_tracker.mark_identity(0.0)
+                        acoustic_fake = 0.0  # No speech -> strictly 0.0
+                        bio_res = {"name": voiceprint_manager.enrolled_name or "Target Profile", "role": "CFO", "speaker_match": 0.0, "cosine_similarity": 0.0, "inference_ms": 0.0}
                         speaker_match = 0.0
                         bio_match = 0.0
                         cosine_sim = 0.0
 
                     # ── Phase 5: Streaming Speech-to-Text (Whisper) ──
+                    t_stt_0 = time.perf_counter()
                     stt_event = await streaming_transcriber.ingest_chunk(
                         samples=None,
                         is_speech=dsp_results["is_speech"],
                         mode=state.mode,
                     )
+                    stride_tracker.mark_stt((time.perf_counter() - t_stt_0) * 1000)
                     current_transcript = streaming_transcriber.current_text or ""
 
                     # ── Phase 6: AI-Powered Intent & Social-Engineering Analysis ──
+                    t_int_0 = time.perf_counter()
                     if dsp_results["is_speech"] and current_transcript:
                         intent_res = intent_analyzer.analyze(current_transcript, mode=state.mode)
                         intent_risk = intent_res["intent_risk"]
@@ -568,8 +585,10 @@ async def audio_websocket_endpoint(websocket: WebSocket):
                         intent_threats = []
                         intent_confidence = 1.0
                         intent_res = {"intent_risk": 0.0, "risk_level": "LOW", "threats": [], "confidence": 1.0}
+                    stride_tracker.mark_intent((time.perf_counter() - t_int_0) * 1000)
 
                     # ── Phase 7: Multi-Signal Risk Fusion Engine ──
+                    t_fus_0 = time.perf_counter()
                     fusion_res = risk_engine.calculate(
                         acoustic_fake=acoustic_fake,
                         speaker_match=speaker_match,
@@ -578,11 +597,27 @@ async def audio_websocket_endpoint(websocket: WebSocket):
                     )
                     raw_risk = fusion_res["risk"]
                     level = fusion_res["level"]
+                    stride_tracker.mark_risk((time.perf_counter() - t_fus_0) * 1000)
 
-                    inference_latency_ms = round((time.perf_counter() - start_time) * 1000, 1)
+                    # ── Phase 8: Autonomous Intervention Engine ──
+                    t_al_0 = time.perf_counter()
+                    if level == "critical":
+                        intervention_evt = intervention_engine.evaluate(
+                            fusion_result=fusion_res,
+                            acoustic_fake=acoustic_fake,
+                            speaker_match=speaker_match,
+                            intent_score=intent_risk,
+                            session_id=session_id,
+                        )
+                        if intervention_evt:
+                            await websocket.send_json(intervention_evt)
+                    stride_tracker.mark_alert((time.perf_counter() - t_al_0) * 1000)
+
+                    latency_metrics = stride_tracker.get_metrics()
+                    inference_latency_ms = latency_metrics["breakdown"]["total_e2e_ms"]
                     buf_stats = ring_buffer.get_stats()
 
-                    # Phase 3, 4, 5 & 6 telemetry payload — Dual Signals + Transcript + Intent Analysis
+                    # Phase 3, 4, 5, 6, 7 & 10 telemetry payload
                     telemetry_payload = {
                         "type": "telemetry",
                         "sessionId": session_id,
@@ -629,6 +664,10 @@ async def audio_websocket_endpoint(websocket: WebSocket):
                         "level": level,
                         "fusion": fusion_res,
                         "latencyMs": inference_latency_ms,
+                        # Phase 10: Stage-by-Stage Latencies & Milestones
+                        "latencies": latency_metrics["breakdown"],
+                        "milestones": latency_metrics["milestones"],
+                        "sla": latency_metrics["sla"],
                         "mode": state.mode,
                         "source": state.source,
                         # Phase 2 stride stats

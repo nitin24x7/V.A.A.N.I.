@@ -74,6 +74,29 @@ export type FusionDetails = {
   }
 }
 
+export type LatencyBreakdown = {
+  vad_ms: number
+  acoustic_ms: number
+  speaker_ms: number
+  stt_ms: number
+  intent_ms: number
+  fusion_ms: number
+  total_e2e_ms: number
+}
+
+export type LatencyMilestones = {
+  audio_to_detection_ms: number
+  audio_to_identity_ms: number
+  audio_to_risk_ms: number
+  audio_to_intervention_ms: number
+}
+
+export type LatencySla = {
+  target_ms: number
+  compliant: boolean
+  margin_ms: number
+}
+
 export type Telemetry = {
   ts: number
   acousticFake: number
@@ -82,6 +105,9 @@ export type Telemetry = {
   risk: number
   fusion?: FusionDetails
   latencyMs: number
+  latencies?: LatencyBreakdown
+  milestones?: LatencyMilestones
+  sla?: LatencySla
   phaseDiscontinuity: number
   jitterHz: number
   shimmer: number
