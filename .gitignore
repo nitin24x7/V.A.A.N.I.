@@ -60,3 +60,14 @@ backend/models/cache/
 *.njsproj
 *.sln
 *.sw?
+
+# Testing & Coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Temporary Audio Artifacts
+*.pcm
+*.raw
+temp_audio/
+uploads/
