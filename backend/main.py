@@ -22,6 +22,7 @@ from risk_engine import get_risk_engine
 from intervention_engine import get_intervention_engine
 from telephony_simulator import run_robustness_suite
 from latency_tracker import LatencyTracker, benchmark_live_pipeline
+from ingestion_adapters import ingestion_manager
 
 app = FastAPI(
     title="VAANI Backend",
@@ -202,6 +203,79 @@ def get_latency_benchmark():
     Evaluates audio -> detection, audio -> identity, audio -> risk, audio -> UI intervention.
     """
     return benchmark_live_pipeline()
+
+class SimulateCallRequest(BaseModel):
+    caller_name: Optional[str] = "Aditi Sharma"
+    caller_role: Optional[str] = "Chief Financial Officer"
+    caller_phone: Optional[str] = "+91 98201 54321"
+    source: Optional[str] = "webrtc"
+    mode: Optional[str] = "legitimate"
+
+class TestPacketRequest(BaseModel):
+    source: str  # "webrtc", "sip", "gateway", "sdk"
+    codec: Optional[str] = "g711_mulaw"
+    sample_count: Optional[int] = 160  # 20ms at 8kHz
+
+@app.get("/api/ingestion/sources")
+def get_ingestion_sources():
+    """Phase 11: Multi-source ingestion fabric status."""
+    return ingestion_manager.get_sources_status()
+
+@app.post("/api/ingestion/simulate-call")
+def simulate_call(req: SimulateCallRequest):
+    """Phase 11: Initiate simulated executive phone call session."""
+    session = ingestion_manager.start_call_session(
+        caller_name=req.caller_name or "Aditi Sharma",
+        caller_role=req.caller_role or "Chief Financial Officer",
+        caller_phone=req.caller_phone or "+91 98201 54321",
+        source=req.source or "webrtc",
+        mode=req.mode or "legitimate",
+    )
+    state.mode = req.mode or "legitimate"
+    state.source = req.source or "webrtc"
+    return {"status": "call_started", "session": session}
+
+@app.post("/api/ingestion/end-call")
+def end_call():
+    """Phase 11: End active call session."""
+    session = ingestion_manager.end_call_session()
+    return {"status": "call_ended", "session": session}
+
+@app.post("/api/ingestion/test-packet")
+def test_ingest_packet(req: TestPacketRequest):
+    """
+    Phase 11: Inject a synthetic packet through any adapter to test multi-source protocol normalization.
+    """
+    import base64
+    if req.source == "sip":
+        import struct
+        payload = bytes([0x7F] * req.sample_count)
+        rtp_header = struct.pack("!BBHII", 0x80, 0, 1001, 160000, 0x12345678)
+        samples, meta = ingestion_manager.sip_rtp.parse_rtp_packet(rtp_header + payload)
+    elif req.source == "gateway":
+        payload_b64 = base64.b64encode(bytes([0x7F] * req.sample_count)).decode()
+        event_data = {
+            "event": "media",
+            "sequenceNumber": "1",
+            "media": {"track": "inbound", "chunk": "1", "payload": payload_b64},
+            "streamSid": "test-stream",
+        }
+        samples, meta = ingestion_manager.gateway.parse_media_event(event_data)
+    elif req.source == "sdk":
+        raw_pcm = bytes(req.sample_count * 2)
+        samples, meta = ingestion_manager.sdk.parse_sdk_chunk("test-token", raw_pcm)
+    else:
+        raw_pcm = bytes(req.sample_count * 2)
+        samples = ingestion_manager.webrtc.parse(raw_pcm)
+        meta = {"protocol": "WebRTC", "format": "16-bit PCM"}
+
+    return {
+        "source": req.source,
+        "samples_decoded": len(samples),
+        "duration_ms": round(len(samples) / 16.0, 2),
+        "target_sample_rate": 16000,
+        "metadata": meta,
+    }
 
 @app.get("/api/voiceprints")
 def get_voiceprints():
@@ -474,6 +548,46 @@ async def analyze_audio_file(file: UploadFile = File(...)):
 @app.get("/api/incidents")
 def get_incidents():
     return {"incidents": state.incidents}
+
+@app.websocket("/ws/telephony-gateway")
+async def telephony_gateway_websocket_endpoint(websocket: WebSocket):
+    """
+    Phase 11: WebSocket endpoint for Cloud Telephony MediaStreams (Twilio / Exotel / Plivo).
+    Accepts JSON media events, unpacks base64 G.711 audio, feeds the ring buffer,
+    and returns real-time fraud warning telemetry.
+    """
+    await websocket.accept()
+    ring_buf = AudioRingBuffer(sample_rate=16000, window_sec=1.0, stride_sec=0.25)
+    
+    try:
+        while True:
+            text_data = await websocket.receive_text()
+            data = json.loads(text_data)
+            samples, meta = ingestion_manager.gateway.parse_media_event(data)
+            if len(samples) > 0:
+                streaming_transcriber.feed_samples(samples)
+                stride_ready = ring_buf.ingest(samples, source_sr=16000)
+                if stride_ready:
+                    win = ring_buf.get_latest_window()
+                    dsp_res = analyze_audio_window(win, sample_rate=16000, mode=state.mode)
+                    if dsp_res["is_speech"]:
+                        ml_res = deepfake_detector.predict(win, sample_rate=16000, fast_mode=True)
+                        fake_prob = ml_res["acoustic_fake_probability"]
+                    else:
+                        fake_prob = 0.0
+
+                    resp = {
+                        "event": "vaani_telemetry",
+                        "streamSid": data.get("streamSid"),
+                        "fake_probability": fake_prob,
+                        "warning": "CRITICAL SYNTHETIC VOICE DETECTED" if fake_prob > 0.85 else "AUTHENTIC",
+                        "status": "active",
+                    }
+                    await websocket.send_json(resp)
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:
+        print(f"[VAANI] Gateway WS note: {e}")
 
 @app.websocket("/ws/audio")
 async def audio_websocket_endpoint(websocket: WebSocket):
